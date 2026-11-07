@@ -199,7 +199,7 @@ class Recon(framework.Framework):
         else:
             self._migrate_db()
         # set workspace prompt
-        self.prompt = self._prompt_template.format(self._base_prompt[:-3], self.workspace.split('/')[-1])
+        self.prompt = self._prompt_template.format(self._base_prompt[:-3], os.path.basename(self.workspace))
         # load workspace configuration
         self._load_config()
         # reload modules after config to populate options
@@ -212,7 +212,7 @@ class Recon(framework.Framework):
             shutil.rmtree(path)
         except OSError:
             return False
-        if workspace == self.workspace.split('/')[-1]:
+        if workspace == os.path.basename(self.workspace):
             self._init_workspace('default')
         return True
 
@@ -335,10 +335,10 @@ class Recon(framework.Framework):
         return resp
 
     def _write_local_file(self, path, content):
-        dirpath = os.path.sep.join(path.split(os.path.sep)[:-1])
+        dirpath = os.path.dirname(os.path.normpath(path))
         if not os.path.exists(dirpath):
             os.makedirs(dirpath)
-        with open(path, 'w') as outfile:
+        with open(path, 'w', encoding='utf-8') as outfile:
             outfile.write(content)
 
     def _remove_empty_dirs(self, base_path):
@@ -460,11 +460,11 @@ class Recon(framework.Framework):
 
     def _load_module(self, dirpath, filename):
         mod_name = filename.split('.')[0]
-        mod_category = re.search('/modules/([^/]*)', dirpath).group(1)
-        mod_dispname = '/'.join(re.split('/modules/', dirpath)[-1].split('/') + [mod_name])
+        norm_dirpath = dirpath.replace('\\', '/')
+        mod_category = re.search('/modules/([^/]*)', norm_dirpath).group(1)
+        mod_dispname = '/'.join(re.split('/modules/', norm_dirpath)[-1].split('/') + [mod_name])
         mod_loadname = mod_dispname.replace('/', '_')
         mod_loadpath = os.path.join(dirpath, filename)
-        mod_file = open(mod_loadpath)
         try:
             # import the module into memory
             mod = SourceFileLoader(mod_loadname, mod_loadpath).load_module()

@@ -19,7 +19,7 @@ tasks = Tasks(recon)
 
 # configuration
 DEBUG = False
-SECRET_KEY = 'we keep no secrets here.'
+SECRET_KEY = os.environ.get('SECRET_KEY') or os.urandom(24).hex()
 JSON_SORT_KEYS = False
 REDIS_URL = os.environ.get('REDIS_URL', 'redis://')
 SWAGGER = {
@@ -32,7 +32,7 @@ SWAGGER = {
     'uiversion': 3,
     'specs_route': '/api/',
 }
-WORKSPACE = recon.workspace.split('/')[-1]
+WORKSPACE = os.path.basename(recon.workspace)
 print((f" * Workspace initialized: {WORKSPACE}"))
 
 def create_app():
