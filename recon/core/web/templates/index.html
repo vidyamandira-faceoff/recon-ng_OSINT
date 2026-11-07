@@ -1,78 +1,1233 @@
-<!DOCTYPE HTML>
-<html>
+<!DOCTYPE html>
+<html lang="en">
 <head>
-    <title>Recon-web</title>
-    <meta charset="utf-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1">
-    <link rel="stylesheet" type="text/css" href="https://fonts.googleapis.com/css?family=Open+Sans:300,400,600">
-    <link rel="stylesheet" type="text/css" href="{{ url_for('static', filename='normalize.css') }}">
-    <link rel="stylesheet" type="text/css" href="{{ url_for('static', filename='skeleton.css') }}">
-    <link rel="stylesheet" type="text/css" href="{{ url_for('static', filename='recon.css') }}">
-    <script type="text/javascript" src="https://ajax.googleapis.com/ajax/libs/jquery/3.1.1/jquery.min.js"></script>
-    <script type="text/javascript" src="{{ url_for('static', filename='sorttable.js') }}"></script>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Recon-ng OSINT Dashboard</title>
+  <style>
+    :root {
+      --bg: #090d16;
+      --card-bg: #111827;
+      --card-hover: #172033;
+      --border: #1f293d;
+      --text: #e2e8f0;
+      --text-muted: #94a3b8;
+      --accent: #06b6d4;
+      --accent-hover: #0891b2;
+      --success: #10b981;
+      --warning: #f59e0b;
+      --danger: #ef4444;
+      --terminal-bg: #030712;
+      --font-mono: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
+    }
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+      background: var(--bg);
+      color: var(--text);
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+      line-height: 1.5;
+      font-size: 14px;
+      min-height: 100vh;
+      display: flex;
+      flex-direction: column;
+    }
+    /* Top Bar */
+    header {
+      background: #0d1322;
+      border-bottom: 1px solid var(--border);
+      padding: 10px 24px;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      position: sticky;
+      top: 0;
+      z-index: 100;
+    }
+    .brand {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      font-weight: 700;
+      font-size: 17px;
+      color: #f8fafc;
+      letter-spacing: 0.5px;
+    }
+    .brand-badge {
+      background: linear-gradient(135deg, #0284c7, #06b6d4);
+      color: #fff;
+      padding: 3px 8px;
+      border-radius: 4px;
+      font-size: 11px;
+      font-weight: 700;
+      text-transform: uppercase;
+    }
+    .workspace-control {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      background: var(--card-bg);
+      padding: 5px 12px;
+      border-radius: 6px;
+      border: 1px solid var(--border);
+    }
+    .workspace-control label {
+      color: var(--text-muted);
+      font-size: 12px;
+      font-weight: 600;
+      text-transform: uppercase;
+    }
+    select, input, textarea, button {
+      font-family: inherit;
+      font-size: 13px;
+    }
+    select, input[type="text"], input[type="password"], textarea {
+      background: #0d1322;
+      border: 1px solid var(--border);
+      color: var(--text);
+      padding: 6px 10px;
+      border-radius: 5px;
+      outline: none;
+      transition: border-color 0.15s;
+    }
+    select:focus, input:focus, textarea:focus {
+      border-color: var(--accent);
+    }
+    .btn {
+      background: #1e293b;
+      border: 1px solid var(--border);
+      color: var(--text);
+      padding: 6px 14px;
+      border-radius: 5px;
+      cursor: pointer;
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      font-weight: 500;
+      transition: all 0.15s;
+    }
+    .btn:hover { background: #283548; border-color: #334155; }
+    .btn-primary { background: var(--accent); color: #082f49; font-weight: 600; border: none; }
+    .btn-primary:hover { background: var(--accent-hover); color: #fff; }
+    .btn-success { background: var(--success); color: #022c22; font-weight: 600; border: none; }
+    .btn-success:hover { background: #059669; color: #fff; }
+    .btn-danger { background: #7f1d1d; color: #fecaca; border: 1px solid #991b1b; }
+    .btn-danger:hover { background: #991b1b; }
+    .btn-sm { padding: 4px 8px; font-size: 12px; }
+
+    /* Navigation Tabs */
+    nav.nav-tabs {
+      background: #0d1322;
+      border-bottom: 1px solid var(--border);
+      display: flex;
+      padding: 0 24px;
+      gap: 4px;
+      overflow-x: auto;
+    }
+    .tab-btn {
+      background: transparent;
+      border: none;
+      border-bottom: 2px solid transparent;
+      color: var(--text-muted);
+      padding: 12px 16px;
+      cursor: pointer;
+      font-weight: 500;
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      transition: all 0.15s;
+    }
+    .tab-btn:hover { color: var(--text); }
+    .tab-btn.active {
+      color: var(--accent);
+      border-bottom-color: var(--accent);
+      font-weight: 600;
+    }
+
+    /* Main Container */
+    main {
+      flex: 1;
+      padding: 24px;
+      max-width: 1440px;
+      width: 100%;
+      margin: 0 auto;
+    }
+    .tab-content { display: none; }
+    .tab-content.active { display: block; }
+
+    /* Cards & Layout */
+    .grid { display: grid; gap: 16px; }
+    .grid-4 { grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); }
+    .grid-2 { grid-template-columns: repeat(auto-fit, minmax(420px, 1fr)); }
+    .card {
+      background: var(--card-bg);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: 18px;
+    }
+    .card-title {
+      font-size: 13px;
+      text-transform: uppercase;
+      font-weight: 700;
+      color: var(--text-muted);
+      margin-bottom: 12px;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+    }
+    .stat-number {
+      font-size: 28px;
+      font-weight: 700;
+      color: #38bdf8;
+      line-height: 1.2;
+    }
+
+    /* Tables */
+    .table-responsive {
+      overflow-x: auto;
+      max-height: 580px;
+      border-radius: 6px;
+      border: 1px solid var(--border);
+      background: #0d1322;
+    }
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      text-align: left;
+      font-size: 13px;
+    }
+    th {
+      background: #131c2e;
+      color: var(--text-muted);
+      padding: 10px 14px;
+      font-weight: 600;
+      border-bottom: 1px solid var(--border);
+      position: sticky;
+      top: 0;
+      z-index: 10;
+    }
+    td {
+      padding: 8px 14px;
+      border-bottom: 1px solid #162032;
+      color: var(--text);
+    }
+    tr:hover td { background: var(--card-hover); }
+
+    /* Badge & Pills */
+    .badge {
+      display: inline-block;
+      padding: 2px 7px;
+      border-radius: 4px;
+      font-size: 11px;
+      font-weight: 600;
+    }
+    .badge-cyan { background: #083344; color: #38bdf8; border: 1px solid #0e7490; }
+    .badge-green { background: #064e3b; color: #34d399; border: 1px solid #059669; }
+    .badge-yellow { background: #451a03; color: #fbbf24; border: 1px solid #b45309; }
+
+    /* Terminal Console Drawer */
+    .terminal-box {
+      background: var(--terminal-bg);
+      border: 1px solid #1e293b;
+      border-radius: 6px;
+      padding: 14px;
+      font-family: var(--font-mono);
+      font-size: 12px;
+      color: #38bdf8;
+      max-height: 400px;
+      overflow-y: auto;
+      white-space: pre-wrap;
+      word-break: break-all;
+    }
+
+    /* Split layout for tables & modules */
+    .split-layout {
+      display: grid;
+      grid-template-columns: 240px 1fr;
+      gap: 16px;
+    }
+    .sidebar-list {
+      background: var(--card-bg);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: 12px;
+      max-height: 680px;
+      overflow-y: auto;
+    }
+    .sidebar-item {
+      padding: 8px 12px;
+      border-radius: 5px;
+      cursor: pointer;
+      color: var(--text-muted);
+      margin-bottom: 4px;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      transition: all 0.15s;
+    }
+    .sidebar-item:hover {
+      background: #1e293b;
+      color: var(--text);
+    }
+    .sidebar-item.active {
+      background: #0284c7;
+      color: #fff;
+      font-weight: 600;
+    }
+
+    /* Toast Notification */
+    #toast {
+      position: fixed;
+      bottom: 24px;
+      right: 24px;
+      background: #1e293b;
+      color: #fff;
+      padding: 12px 20px;
+      border-radius: 6px;
+      border: 1px solid var(--border);
+      box-shadow: 0 10px 25px rgba(0,0,0,0.5);
+      z-index: 1000;
+      opacity: 0;
+      pointer-events: none;
+      transition: opacity 0.25s, transform 0.25s;
+      transform: translateY(10px);
+    }
+    #toast.show { opacity: 1; transform: translateY(0); pointer-events: auto; }
+    #toast.success { border-color: var(--success); }
+    #toast.error { border-color: var(--danger); }
+
+    /* Modals */
+    .modal-backdrop {
+      position: fixed;
+      inset: 0;
+      background: rgba(3, 7, 18, 0.75);
+      backdrop-filter: blur(2px);
+      display: none;
+      align-items: center;
+      justify-content: center;
+      z-index: 200;
+    }
+    .modal-backdrop.open { display: flex; }
+    .modal {
+      background: var(--card-bg);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      width: 90%;
+      max-width: 520px;
+      padding: 24px;
+      box-shadow: 0 20px 40px rgba(0,0,0,0.6);
+    }
+    .modal-title {
+      font-size: 16px;
+      font-weight: 700;
+      color: #f8fafc;
+      margin-bottom: 16px;
+    }
+    .form-group {
+      margin-bottom: 14px;
+    }
+    .form-group label {
+      display: block;
+      font-size: 12px;
+      color: var(--text-muted);
+      margin-bottom: 5px;
+      font-weight: 600;
+    }
+    .form-group input, .form-group textarea, .form-group select {
+      width: 100%;
+    }
+    .modal-actions {
+      display: flex;
+      justify-content: flex-end;
+      gap: 10px;
+      margin-top: 20px;
+    }
+  </style>
 </head>
 <body>
-    <div class="container">
-        <div class="nav">
-            <div class="cell" id="nav">
-                <div class="content-left">
-                    <select id="template">
-                        <option id="templateOption"></option>
-                    </select>
-                    <a href="{{ url_for('index') }}">[recon-ng]</a>
-                    <span>[</span>
-                    <select id="workspace">
-                    {% for workspace in workspaces %}
-                        <option value="{{ workspace }}"{% if workspace == config.WORKSPACE %}selected{% endif %}>{{ workspace }}</option>
-                    {% endfor %}
-                    </select>
-                    <span>]</span>
-                </div>
-            </div>
-            <div class="cell" id="reports">
-                <div class="content-right">
-                    <ul class="button-list" id="reports-list"></ul>
-                </div>
-            </div>
-        </div>
-        <div class="content">
-            <div class="row" id="tables">
-                <div class="u-full-width db-tables outlined tooltip">
-                    <span class="tooltiptext">select a table</span>
-                    <div class="label">Tables:</div>
-                    <ul class="button-list" id="tables-list"></ul>
-                </div>
-            </div>
-            <div class="row" id="summary">
-                <div class="one-third column summary left outlined tooltip fill">
-                    <span class="tooltiptext">harvested items</span>
-                    <div id="summary-list-l"></div>
-                </div>
-                <div class="two-thirds column summary right outlined tooltip fill">
-                    <span class="tooltiptext">module activity</span>
-                    <div id="summary-list-r"></div>
-                </div>
-            </div>
-            <div class="row" id="columns">
-                <div class="u-full-width db-tables outlined tooltip">
-                    <span class="tooltiptext">filter data by columns</span>
-                    <div id="columns-list"></div>
-                </div>
-            </div>
-            <div class="row" id="exports">
-                <div class="u-full-width db-tables outlined tooltip">
-                    <span class="tooltiptext">export filtered data</span>
-                    <div class="label">Export:</div>
-                    <ul class="button-list" id="exports-list"></ul>
-                </div>
-            </div>
-            <div class="row" id="data">
-                <div class="u-full-width db-table outlined">
-                    <div id="data-table"></div>
-                </div>
-            </div>
-        </div>
+
+  <!-- Top Navigation Bar -->
+  <header>
+    <div class="brand">
+      <span>🌐 Recon-ng OSINT</span>
+      <span class="brand-badge">v5.1.2 Web</span>
     </div>
-    <script type="text/javascript" src="{{ url_for('static', filename='recon.js') }}"></script>
+
+    <div style="display: flex; align-items: center; gap: 12px;">
+      <div class="workspace-control">
+        <label>Workspace:</label>
+        <select id="wsSelect" onchange="switchWorkspace(this.value)"></select>
+        <button class="btn btn-sm btn-primary" onclick="openNewWsModal()" title="Create new workspace">+ New</button>
+        <button class="btn btn-sm btn-danger" onclick="deleteCurrentWorkspace()" title="Delete current workspace">🗑️</button>
+      </div>
+      <a href="/api/" target="_blank" class="btn btn-sm" style="text-decoration:none;">📄 Swagger API</a>
+    </div>
+  </header>
+
+  <!-- Navigation Tabs -->
+  <nav class="nav-tabs">
+    <button class="tab-btn active" onclick="showTab('dashboard')">📊 Dashboard</button>
+    <button class="tab-btn" onclick="showTab('data')">🗄️ Data & Tables</button>
+    <button class="tab-btn" onclick="showTab('modules')">⚡ Modules & Run</button>
+    <button class="tab-btn" onclick="showTab('keys')">🔑 API Keys</button>
+    <button class="tab-btn" onclick="showTab('options')">⚙️ Global Options</button>
+    <button class="tab-btn" onclick="showTab('reports')">📑 Reports & Exports</button>
+  </nav>
+
+  <!-- Main Content Area -->
+  <main>
+
+    <!-- Tab 1: Dashboard -->
+    <section id="tab-dashboard" class="tab-content active">
+      <div class="grid grid-4" id="statsGrid" style="margin-bottom: 24px;">
+        <!-- Dynamic record count cards -->
+      </div>
+
+      <div class="grid grid-2">
+        <div class="card">
+          <div class="card-title">
+            <span>Harvested Records Summary</span>
+            <button class="btn btn-sm" onclick="loadDashboard()">🔄 Refresh</button>
+          </div>
+          <div class="table-responsive" style="max-height: 320px;">
+            <table id="summaryTable">
+              <thead>
+                <tr>
+                  <th>Table</th>
+                  <th>Total Records</th>
+                  <th>Action</th>
+                </tr>
+              </thead>
+              <tbody></tbody>
+            </table>
+          </div>
+        </div>
+
+        <div class="card">
+          <div class="card-title">
+            <span>Recent Module Activity</span>
+          </div>
+          <div class="table-responsive" style="max-height: 320px;">
+            <table id="activityTable">
+              <thead>
+                <tr>
+                  <th>Module</th>
+                  <th>Runs</th>
+                </tr>
+              </thead>
+              <tbody></tbody>
+            </table>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- Tab 2: Data & Tables -->
+    <section id="tab-data" class="tab-content">
+      <div class="split-layout">
+        <!-- Tables Sidebar -->
+        <div class="sidebar-list">
+          <div class="card-title" style="margin-bottom: 8px;">Tables</div>
+          <div id="tableListItems"></div>
+        </div>
+
+        <!-- Table View & Controls -->
+        <div>
+          <div class="card" style="margin-bottom: 16px;">
+            <div style="display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 10px;">
+              <div>
+                <h3 id="currentTableTitle" style="font-size: 17px; font-weight: 700; color: #38bdf8;">domains</h3>
+                <span id="currentTableCount" style="color: var(--text-muted); font-size: 12px;">0 records</span>
+              </div>
+              <div style="display: flex; gap: 8px; align-items: center; flex-wrap: wrap;">
+                <input type="text" id="tableSearch" placeholder="🔍 Search records..." oninput="filterTableRows()" style="width: 180px;">
+                <button class="btn btn-sm btn-success" onclick="openAddRecordModal()">+ Add Record</button>
+                <button class="btn btn-sm" onclick="exportCurrentTable('csv')">Export CSV</button>
+                <button class="btn btn-sm" onclick="exportCurrentTable('json')">Export JSON</button>
+                <button class="btn btn-sm btn-danger" onclick="clearCurrentTable()">Clear Table</button>
+              </div>
+            </div>
+          </div>
+
+          <div class="table-responsive">
+            <table id="dataTable">
+              <thead id="dataTableHead"></thead>
+              <tbody id="dataTableBody"></tbody>
+            </table>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- Tab 3: Modules & Run -->
+    <section id="tab-modules" class="tab-content">
+      <div class="split-layout">
+        <!-- Module Browser Sidebar -->
+        <div class="sidebar-list">
+          <div class="card-title" style="margin-bottom: 8px;">Modules</div>
+          <input type="text" id="moduleSearch" placeholder="Filter modules..." oninput="filterModules()" style="width: 100%; margin-bottom: 10px;">
+          <div id="modulesContainer"></div>
+        </div>
+
+        <!-- Module Details & Execution Panel -->
+        <div>
+          <div class="card" style="margin-bottom: 16px;">
+            <div style="display: flex; justify-content: space-between; align-items: flex-start; margin-bottom: 12px;">
+              <div>
+                <h3 id="modTitle" style="font-size: 16px; color: #38bdf8;">Select a module</h3>
+                <p id="modDesc" style="color: var(--text-muted); font-size: 13px; margin-top: 4px;">Click any module from the left list to view options and run.</p>
+              </div>
+              <button id="runModBtn" class="btn btn-primary" onclick="executeCurrentModule()" style="display: none;">🚀 Run Module</button>
+            </div>
+
+            <!-- Module Options Table -->
+            <div id="modOptionsContainer" style="display: none; margin-top: 16px;">
+              <h4 style="font-size: 13px; color: var(--text-muted); text-transform: uppercase; margin-bottom: 8px;">Module Options</h4>
+              <div class="table-responsive" style="max-height: 200px; margin-bottom: 12px;">
+                <table id="modOptionsTable">
+                  <thead>
+                    <tr>
+                      <th>Option</th>
+                      <th>Current Value</th>
+                      <th>Required</th>
+                      <th>Description</th>
+                    </tr>
+                  </thead>
+                  <tbody></tbody>
+                </table>
+              </div>
+            </div>
+          </div>
+
+          <!-- Live Execution Terminal -->
+          <div class="card">
+            <div class="card-title">
+              <span>Execution Output</span>
+              <span id="runStatus" class="badge badge-cyan" style="display: none;">READY</span>
+            </div>
+            <div id="terminalLog" class="terminal-box">Recon-ng module terminal idle. Select a module and click 'Run Module'.</div>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- Tab 4: API Keys -->
+    <section id="tab-keys" class="tab-content">
+      <div class="card" style="margin-bottom: 16px;">
+        <div style="display: flex; justify-content: space-between; align-items: center;">
+          <div>
+            <h3 style="font-size: 16px; font-weight: 700;">API Keys Keystore</h3>
+            <p style="color: var(--text-muted); font-size: 13px;">Manage third-party API credentials for Shodan, Censys, VirusTotal, GitHub, Bing, etc.</p>
+          </div>
+          <button class="btn btn-primary" onclick="openKeyModal()">+ Add / Update Key</button>
+        </div>
+      </div>
+
+      <div class="card">
+        <div class="table-responsive">
+          <table id="keysTable">
+            <thead>
+              <tr>
+                <th>Key Name</th>
+                <th>Status</th>
+                <th>Masked Value</th>
+                <th style="width: 140px;">Actions</th>
+              </tr>
+            </thead>
+            <tbody></tbody>
+          </table>
+        </div>
+      </div>
+    </section>
+
+    <!-- Tab 5: Global Options -->
+    <section id="tab-options" class="tab-content">
+      <div class="card" style="margin-bottom: 16px;">
+        <div style="display: flex; justify-content: space-between; align-items: center;">
+          <div>
+            <h3 style="font-size: 16px; font-weight: 700;">Global Framework Options</h3>
+            <p style="color: var(--text-muted); font-size: 13px;">Configure global settings such as default nameservers, HTTP proxies, threads, user-agent, and timeouts.</p>
+          </div>
+          <button class="btn btn-success" onclick="saveGlobalOptions()">💾 Save Changes</button>
+        </div>
+      </div>
+
+      <div class="card">
+        <div class="table-responsive">
+          <table id="globalOptionsTable">
+            <thead>
+              <tr>
+                <th>Option</th>
+                <th>Value</th>
+                <th>Description</th>
+              </tr>
+            </thead>
+            <tbody></tbody>
+          </table>
+        </div>
+      </div>
+    </section>
+
+    <!-- Tab 6: Reports & Exports -->
+    <section id="tab-reports" class="tab-content">
+      <div class="grid grid-2">
+        <div class="card">
+          <div class="card-title">Available Interactive Reports</div>
+          <p style="color: var(--text-muted); margin-bottom: 16px;">Click to view or generate visual reports for the active workspace:</p>
+          <div id="reportsList" style="display: flex; flex-direction: column; gap: 10px;"></div>
+        </div>
+
+        <div class="card">
+          <div class="card-title">Direct Workspace Exports</div>
+          <p style="color: var(--text-muted); margin-bottom: 16px;">Download all harvested data in your preferred format:</p>
+          <div id="exportFormats" style="display: flex; gap: 10px; flex-wrap: wrap;"></div>
+        </div>
+      </div>
+    </section>
+
+  </main>
+
+  <!-- Modals -->
+
+  <!-- Modal: Create Workspace -->
+  <div class="modal-backdrop" id="newWsModal">
+    <div class="modal">
+      <div class="modal-title">Create New Workspace</div>
+      <div class="form-group">
+        <label>Workspace Name:</label>
+        <input type="text" id="newWsName" placeholder="e.g. target_corp">
+      </div>
+      <div class="modal-actions">
+        <button class="btn" onclick="closeModal('newWsModal')">Cancel</button>
+        <button class="btn btn-primary" onclick="submitCreateWorkspace()">Create</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Modal: Add Record -->
+  <div class="modal-backdrop" id="addRecordModal">
+    <div class="modal">
+      <div class="modal-title" id="addRecordTitle">Add Record</div>
+      <div id="dynamicRecordFields"></div>
+      <div class="modal-actions">
+        <button class="btn" onclick="closeModal('addRecordModal')">Cancel</button>
+        <button class="btn btn-success" onclick="submitAddRecord()">Insert</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Modal: Add / Update Key -->
+  <div class="modal-backdrop" id="keyModal">
+    <div class="modal">
+      <div class="modal-title">Add / Update API Key</div>
+      <div class="form-group">
+        <label>Key Identifier:</label>
+        <input type="text" id="keyNameInput" placeholder="e.g. shodan_api, censysio_id, virustotal_api">
+      </div>
+      <div class="form-group">
+        <label>Key Value:</label>
+        <input type="password" id="keyValueInput" placeholder="Enter key / token">
+      </div>
+      <div class="modal-actions">
+        <button class="btn" onclick="closeModal('keyModal')">Cancel</button>
+        <button class="btn btn-primary" onclick="submitSaveKey()">Save Key</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Toast Notification -->
+  <div id="toast"></div>
+
+  <!-- Application Logic -->
+  <script>
+    // State
+    let currentWorkspace = 'default';
+    let allWorkspaces = [];
+    let currentTable = 'domains';
+    let currentRows = [];
+    let allModules = [];
+    let selectedModule = null;
+
+    // UI Toast
+    function showToast(msg, type = 'info') {
+      const toast = document.getElementById('toast');
+      toast.textContent = msg;
+      toast.className = `show ${type}`;
+      setTimeout(() => { toast.className = ''; }, 3500);
+    }
+
+    // Modal Helpers
+    function openModal(id) { document.getElementById(id).classList.add('open'); }
+    function closeModal(id) { document.getElementById(id).classList.remove('open'); }
+
+    // Tabs Navigation
+    function showTab(tabName) {
+      document.querySelectorAll('.tab-btn').forEach(btn => btn.classList.remove('active'));
+      document.querySelectorAll('.tab-content').forEach(c => c.classList.remove('active'));
+      event.target.classList.add('active');
+      document.getElementById(`tab-${tabName}`).classList.add('active');
+
+      if (tabName === 'dashboard') loadDashboard();
+      if (tabName === 'data') loadTable(currentTable);
+      if (tabName === 'modules') loadModulesList();
+      if (tabName === 'keys') loadKeys();
+      if (tabName === 'options') loadGlobalOptions();
+      if (tabName === 'reports') loadReportsAndExports();
+    }
+
+    // --- Workspaces ---
+    async function loadWorkspaces() {
+      try {
+        const res = await fetch('/api/workspaces/');
+        const data = await res.json();
+        allWorkspaces = data.workspaces || [];
+        const select = document.getElementById('wsSelect');
+        select.innerHTML = '';
+        allWorkspaces.forEach(ws => {
+          const opt = document.createElement('option');
+          opt.value = ws;
+          opt.textContent = ws;
+          if (ws === currentWorkspace) opt.selected = true;
+          select.appendChild(opt);
+        });
+      } catch (err) {
+        showToast('Error loading workspaces: ' + err.message, 'error');
+      }
+    }
+
+    async function switchWorkspace(name) {
+      try {
+        await fetch(`/api/workspaces/${encodeURIComponent(name)}`, {
+          method: 'PATCH',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ status: 'active' })
+        });
+        currentWorkspace = name;
+        showToast(`Workspace switched to ${name}`, 'success');
+        loadDashboard();
+        loadTablesList();
+      } catch (err) {
+        showToast('Failed to switch workspace', 'error');
+      }
+    }
+
+    function openNewWsModal() {
+      document.getElementById('newWsName').value = '';
+      openModal('newWsModal');
+    }
+
+    async function submitCreateWorkspace() {
+      const name = document.getElementById('newWsName').value.trim();
+      if (!name) return showToast('Workspace name required', 'error');
+      try {
+        const res = await fetch('/api/workspaces/', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ name })
+        });
+        if (!res.ok) throw new Error('Create failed');
+        closeModal('newWsModal');
+        showToast(`Workspace '${name}' created!`, 'success');
+        currentWorkspace = name;
+        await loadWorkspaces();
+        loadDashboard();
+        loadTablesList();
+      } catch (err) {
+        showToast(err.message, 'error');
+      }
+    }
+
+    async function deleteCurrentWorkspace() {
+      if (currentWorkspace === 'default') {
+        return showToast("Cannot delete 'default' workspace.", 'error');
+      }
+      if (!confirm(`Are you sure you want to permanently delete workspace '${currentWorkspace}'?`)) return;
+      try {
+        const res = await fetch(`/api/workspaces/${encodeURIComponent(currentWorkspace)}`, { method: 'DELETE' });
+        const data = await res.json();
+        showToast(data.message, 'success');
+        currentWorkspace = data.current_workspace || 'default';
+        await loadWorkspaces();
+        loadDashboard();
+        loadTablesList();
+      } catch (err) {
+        showToast('Error deleting workspace: ' + err.message, 'error');
+      }
+    }
+
+    // --- Dashboard ---
+    async function loadDashboard() {
+      try {
+        const res = await fetch('/api/dashboard');
+        const data = await res.json();
+        const records = data.records || [];
+        const activity = data.activity || [];
+
+        // Update Top 4 Metric Cards
+        const top4 = ['domains', 'hosts', 'contacts', 'vulnerabilities'];
+        const statsGrid = document.getElementById('statsGrid');
+        statsGrid.innerHTML = '';
+        top4.forEach(t => {
+          const rec = records.find(r => r.name === t) || { name: t, count: 0 };
+          const card = document.createElement('div');
+          card.className = 'card';
+          card.innerHTML = `
+            <div class="card-title">${rec.name}</div>
+            <div class="stat-number">${rec.count}</div>
+          `;
+          statsGrid.appendChild(card);
+        });
+
+        // Summary Table
+        const sBody = document.querySelector('#summaryTable tbody');
+        sBody.innerHTML = '';
+        records.forEach(r => {
+          const tr = document.createElement('tr');
+          tr.innerHTML = `
+            <td><strong>${r.name}</strong></td>
+            <td><span class="badge ${r.count > 0 ? 'badge-cyan' : ''}">${r.count}</span></td>
+            <td><button class="btn btn-sm" onclick="viewTableFromDash('${r.name}')">View</button></td>
+          `;
+          sBody.appendChild(tr);
+        });
+
+        // Activity Table
+        const aBody = document.querySelector('#activityTable tbody');
+        aBody.innerHTML = '';
+        if (activity.length === 0) {
+          aBody.innerHTML = '<tr><td colspan="2" style="color:var(--text-muted);">No module activity recorded yet.</td></tr>';
+        } else {
+          activity.forEach(a => {
+            const tr = document.createElement('tr');
+            tr.innerHTML = `<td><code>${a.module}</code></td><td><span class="badge badge-green">${a.runs}</span></td>`;
+            aBody.appendChild(tr);
+          });
+        }
+      } catch (err) {
+        console.error('Failed to load dashboard', err);
+      }
+    }
+
+    function viewTableFromDash(tableName) {
+      document.querySelectorAll('.tab-btn').forEach(btn => {
+        if (btn.textContent.includes('Data')) btn.click();
+      });
+      loadTable(tableName);
+    }
+
+    // --- Tables & Data ---
+    async function loadTablesList() {
+      try {
+        const res = await fetch('/api/tables/');
+        const data = await res.json();
+        const tables = data.tables || [];
+        const container = document.getElementById('tableListItems');
+        container.innerHTML = '';
+        tables.forEach(t => {
+          const div = document.createElement('div');
+          div.className = `sidebar-item ${t === currentTable ? 'active' : ''}`;
+          div.textContent = t;
+          div.onclick = () => {
+            document.querySelectorAll('.sidebar-item').forEach(el => el.classList.remove('active'));
+            div.classList.add('active');
+            loadTable(t);
+          };
+          container.appendChild(div);
+        });
+      } catch (err) {
+        console.error('Failed to load tables list', err);
+      }
+    }
+
+    async function loadTable(tableName) {
+      currentTable = tableName;
+      document.getElementById('currentTableTitle').textContent = tableName;
+      try {
+        const res = await fetch(`/api/tables/${encodeURIComponent(tableName)}`);
+        const data = await res.json();
+        currentRows = data.rows || [];
+        const cols = data.columns || [];
+
+        document.getElementById('currentTableCount').textContent = `${currentRows.length} records`;
+
+        // Render Head
+        const thead = document.getElementById('dataTableHead');
+        thead.innerHTML = '<tr>' + cols.map(c => `<th>${c}</th>`).join('') + '<th style="width:70px;">Action</th></tr>';
+
+        // Render Body
+        renderTableRows(currentRows, cols);
+      } catch (err) {
+        showToast('Error loading table data', 'error');
+      }
+    }
+
+    function renderTableRows(rows, cols) {
+      const tbody = document.getElementById('dataTableBody');
+      tbody.innerHTML = '';
+      if (rows.length === 0) {
+        tbody.innerHTML = `<tr><td colspan="${cols.length + 1}" style="text-align:center; color:var(--text-muted); padding:20px;">No records found in '${currentTable}'.</td></tr>`;
+        return;
+      }
+      rows.forEach(r => {
+        const tr = document.createElement('tr');
+        const cells = cols.map(c => `<td>${r[c] !== null && r[c] !== undefined ? escapeHtml(String(r[c])) : '<em style="color:#64748b">-</em>'}</td>`).join('');
+        tr.innerHTML = cells + `<td><button class="btn btn-sm btn-danger" onclick="deleteTableRow(${r.rowid})">🗑️</button></td>`;
+        tbody.appendChild(tr);
+      });
+    }
+
+    function filterTableRows() {
+      const q = document.getElementById('tableSearch').value.toLowerCase();
+      if (!q) {
+        const cols = currentRows.length > 0 ? Object.keys(currentRows[0]) : [];
+        return renderTableRows(currentRows, cols);
+      }
+      const filtered = currentRows.filter(row => {
+        return Object.values(row).some(v => String(v).toLowerCase().includes(q));
+      });
+      const cols = currentRows.length > 0 ? Object.keys(currentRows[0]) : [];
+      renderTableRows(filtered, cols);
+    }
+
+    function openAddRecordModal() {
+      document.getElementById('addRecordTitle').textContent = `Add Record to '${currentTable}'`;
+      const container = document.getElementById('dynamicRecordFields');
+      container.innerHTML = '';
+
+      // Common fields mapping per table
+      const tableFields = {
+        domains: ['domain', 'notes'],
+        companies: ['company', 'description', 'notes'],
+        hosts: ['host', 'ip_address', 'region', 'country', 'notes'],
+        contacts: ['first_name', 'last_name', 'email', 'title', 'phone', 'notes'],
+        credentials: ['username', 'password', 'hash', 'type', 'leak', 'notes'],
+        netblocks: ['netblock', 'notes'],
+        ports: ['ip_address', 'host', 'port', 'protocol', 'banner', 'notes'],
+        locations: ['latitude', 'longitude', 'street_address', 'notes'],
+        vulnerabilities: ['host', 'reference', 'category', 'status', 'notes']
+      };
+
+      const fields = tableFields[currentTable] || ['name', 'value', 'notes'];
+      fields.forEach(f => {
+        const div = document.createElement('div');
+        div.className = 'form-group';
+        div.innerHTML = `
+          <label>${f.replace('_', ' ').toUpperCase()}:</label>
+          <input type="text" id="field_${f}" placeholder="Enter ${f}">
+        `;
+        container.appendChild(div);
+      });
+
+      openModal('addRecordModal');
+    }
+
+    async function submitAddRecord() {
+      const payload = {};
+      document.querySelectorAll('#dynamicRecordFields input').forEach(input => {
+        const key = input.id.replace('field_', '');
+        if (input.value.trim()) payload[key] = input.value.trim();
+      });
+
+      if (Object.keys(payload).length === 0) {
+        return showToast('At least one field is required', 'error');
+      }
+
+      try {
+        const res = await fetch(`/api/tables/${encodeURIComponent(currentTable)}`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(payload)
+        });
+        const data = await res.json();
+        closeModal('addRecordModal');
+        showToast(data.message || 'Record inserted!', 'success');
+        loadTable(currentTable);
+        loadDashboard();
+      } catch (err) {
+        showToast('Failed to insert record: ' + err.message, 'error');
+      }
+    }
+
+    async function deleteTableRow(rowid) {
+      if (!confirm(`Delete record #${rowid}?`)) return;
+      try {
+        await fetch(`/api/tables/${encodeURIComponent(currentTable)}?rowid=${rowid}`, { method: 'DELETE' });
+        showToast('Record deleted', 'success');
+        loadTable(currentTable);
+        loadDashboard();
+      } catch (err) {
+        showToast('Failed to delete row', 'error');
+      }
+    }
+
+    async function clearCurrentTable() {
+      if (!confirm(`Clear ALL records from '${currentTable}'? This cannot be undone.`)) return;
+      try {
+        await fetch(`/api/tables/${encodeURIComponent(currentTable)}`, { method: 'DELETE' });
+        showToast(`Table '${currentTable}' cleared`, 'success');
+        loadTable(currentTable);
+        loadDashboard();
+      } catch (err) {
+        showToast('Failed to clear table', 'error');
+      }
+    }
+
+    function exportCurrentTable(format) {
+      window.open(`/api/tables/${encodeURIComponent(currentTable)}?format=${format}`, '_blank');
+    }
+
+    // --- Modules ---
+    async function loadModulesList() {
+      try {
+        const res = await fetch('/api/modules/');
+        const data = await res.json();
+        allModules = data.modules || [];
+        renderModulesList(allModules);
+      } catch (err) {
+        console.error('Failed to load modules', err);
+      }
+    }
+
+    function renderModulesList(modules) {
+      const container = document.getElementById('modulesContainer');
+      container.innerHTML = '';
+      modules.forEach(m => {
+        const div = document.createElement('div');
+        div.className = `sidebar-item ${selectedModule === m ? 'active' : ''}`;
+        div.textContent = m;
+        div.title = m;
+        div.onclick = () => selectModule(m);
+        container.appendChild(div);
+      });
+    }
+
+    function filterModules() {
+      const q = document.getElementById('moduleSearch').value.toLowerCase();
+      const filtered = allModules.filter(m => m.toLowerCase().includes(q));
+      renderModulesList(filtered);
+    }
+
+    async function selectModule(modulePath) {
+      selectedModule = modulePath;
+      document.querySelectorAll('#modulesContainer .sidebar-item').forEach(el => {
+        el.classList.toggle('active', el.textContent === modulePath);
+      });
+      document.getElementById('modTitle').textContent = modulePath;
+      document.getElementById('runModBtn').style.display = 'inline-flex';
+
+      try {
+        const res = await fetch(`/api/modules/${modulePath}`);
+        const data = await res.json();
+        document.getElementById('modDesc').textContent = `${data.description || 'No description'} (Author: ${data.author || 'Unknown'}, Version: ${data.version || '1.0'})`;
+
+        const optionsContainer = document.getElementById('modOptionsContainer');
+        const tbody = document.querySelector('#modOptionsTable tbody');
+        tbody.innerHTML = '';
+
+        if (data.options && data.options.length > 0) {
+          optionsContainer.style.display = 'block';
+          data.options.forEach(opt => {
+            const tr = document.createElement('tr');
+            tr.innerHTML = `
+              <td><strong>${opt.name}</strong></td>
+              <td><input type="text" id="opt_${opt.name}" value="${opt.value || ''}" style="width:100%;"></td>
+              <td><span class="badge ${opt.required ? 'badge-yellow' : ''}">${opt.required ? 'Yes' : 'No'}</span></td>
+              <td style="color:var(--text-muted); font-size:12px;">${opt.description || ''}</td>
+            `;
+            tbody.appendChild(tr);
+          });
+        } else {
+          optionsContainer.style.display = 'none';
+        }
+      } catch (err) {
+        showToast('Error loading module details', 'error');
+      }
+    }
+
+    async function executeCurrentModule() {
+      if (!selectedModule) return;
+      const statusBadge = document.getElementById('runStatus');
+      const terminal = document.getElementById('terminalLog');
+
+      statusBadge.style.display = 'inline-block';
+      statusBadge.textContent = 'RUNNING...';
+      statusBadge.className = 'badge badge-yellow';
+      terminal.textContent = `[*] Starting ${selectedModule}...\n[*] Please wait for OSINT data collection...\n`;
+
+      // Gather option overrides
+      const options = [];
+      document.querySelectorAll('#modOptionsTable input').forEach(input => {
+        const name = input.id.replace('opt_', '');
+        options.push({ name, value: input.value });
+      });
+
+      try {
+        const res = await fetch(`/api/modules/${selectedModule}/run`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ options })
+        });
+        const data = await res.json();
+        terminal.textContent = data.output || '[*] Module completed with no terminal output.';
+        statusBadge.textContent = data.status.toUpperCase();
+        statusBadge.className = `badge ${data.status === 'finished' ? 'badge-green' : 'badge-danger'}`;
+        showToast(`Module '${selectedModule}' finished!`, 'success');
+        loadDashboard();
+      } catch (err) {
+        terminal.textContent += `\n[!] Execution error: ${err.message}`;
+        statusBadge.textContent = 'ERROR';
+        statusBadge.className = 'badge badge-danger';
+        showToast('Module execution failed', 'error');
+      }
+    }
+
+    // --- API Keys ---
+    async function loadKeys() {
+      try {
+        const res = await fetch('/api/keys/');
+        const data = await res.json();
+        const tbody = document.querySelector('#keysTable tbody');
+        tbody.innerHTML = '';
+        (data.keys || []).forEach(k => {
+          const tr = document.createElement('tr');
+          const masked = k.masked_value ? escapeHtml(k.masked_value) : '<span style="color:#64748b;">Not set</span>';
+          tr.innerHTML = `
+            <td><code>${escapeHtml(k.name)}</code></td>
+            <td><span class="badge ${k.is_set ? 'badge-green' : 'badge-yellow'}">${k.is_set ? 'Configured' : 'Empty'}</span></td>
+            <td>${masked}</td>
+            <td>
+              <button class="btn btn-sm" onclick="editKey('${k.name}')">Edit</button>
+              <button class="btn btn-sm btn-danger" onclick="deleteKey('${k.name}')">Delete</button>
+            </td>
+          `;
+          tbody.appendChild(tr);
+        });
+      } catch (err) {
+        console.error('Failed to load keys', err);
+      }
+    }
+
+    function openKeyModal() {
+      document.getElementById('keyNameInput').value = '';
+      document.getElementById('keyValueInput').value = '';
+      openModal('keyModal');
+    }
+
+    function editKey(name) {
+      document.getElementById('keyNameInput').value = name;
+      document.getElementById('keyValueInput').value = '';
+      openModal('keyModal');
+    }
+
+    async function submitSaveKey() {
+      const name = document.getElementById('keyNameInput').value.trim();
+      const value = document.getElementById('keyValueInput').value.trim();
+      if (!name) return showToast('Key name required', 'error');
+      try {
+        await fetch('/api/keys/', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ name, value })
+        });
+        closeModal('keyModal');
+        showToast(`Key '${name}' saved!`, 'success');
+        loadKeys();
+      } catch (err) {
+        showToast('Error saving key', 'error');
+      }
+    }
+
+    async function deleteKey(name) {
+      if (!confirm(`Delete key '${name}'?`)) return;
+      try {
+        await fetch(`/api/keys/${encodeURIComponent(name)}`, { method: 'DELETE' });
+        showToast(`Key '${name}' deleted`, 'success');
+        loadKeys();
+      } catch (err) {
+        showToast('Failed to delete key', 'error');
+      }
+    }
+
+    // --- Global Options ---
+    async function loadGlobalOptions() {
+      try {
+        const res = await fetch('/api/options/');
+        const data = await res.json();
+        const tbody = document.querySelector('#globalOptionsTable tbody');
+        tbody.innerHTML = '';
+        (data.options || []).forEach(opt => {
+          const tr = document.createElement('tr');
+          tr.innerHTML = `
+            <td><strong>${opt.name}</strong></td>
+            <td><input type="text" id="gopt_${opt.name}" value="${opt.value || ''}" style="width:100%; max-width:300px;"></td>
+            <td style="color:var(--text-muted); font-size:12px;">${opt.description}</td>
+          `;
+          tbody.appendChild(tr);
+        });
+      } catch (err) {
+        console.error('Failed to load global options', err);
+      }
+    }
+
+    async function saveGlobalOptions() {
+      const options = [];
+      document.querySelectorAll('#globalOptionsTable input').forEach(input => {
+        const name = input.id.replace('gopt_', '');
+        options.push({ name, value: input.value });
+      });
+      try {
+        await fetch('/api/options/', {
+          method: 'PATCH',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ options })
+        });
+        showToast('Global options saved!', 'success');
+      } catch (err) {
+        showToast('Failed to save options', 'error');
+      }
+    }
+
+    // --- Reports & Exports ---
+    async function loadReportsAndExports() {
+      try {
+        const [repRes, expRes] = await Promise.all([fetch('/api/reports/'), fetch('/api/exports')]);
+        const repData = await repRes.json();
+        const expData = await expRes.json();
+
+        const reportsList = document.getElementById('reportsList');
+        reportsList.innerHTML = '';
+        (repData.reports || []).forEach(r => {
+          const btn = document.createElement('a');
+          btn.href = `/api/reports/${encodeURIComponent(r)}`;
+          btn.target = '_blank';
+          btn.className = 'btn';
+          btn.textContent = `📄 Open ${r.toUpperCase()} Report`;
+          reportsList.appendChild(btn);
+        });
+
+        const exportFormats = document.getElementById('exportFormats');
+        exportFormats.innerHTML = '';
+        (expData.exports || []).forEach(fmt => {
+          const btn = document.createElement('button');
+          btn.className = 'btn';
+          btn.textContent = `📥 ${fmt.toUpperCase()}`;
+          btn.onclick = () => window.open(`/api/tables/hosts?format=${fmt}`, '_blank');
+          exportFormats.appendChild(btn);
+        });
+      } catch (err) {
+        console.error('Failed to load reports', err);
+      }
+    }
+
+    function escapeHtml(str) {
+      return str.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+    }
+
+    // Initial Load
+    document.addEventListener('DOMContentLoaded', async () => {
+      await loadWorkspaces();
+      loadDashboard();
+      loadTablesList();
+    });
+  </script>
 </body>
 </html>
