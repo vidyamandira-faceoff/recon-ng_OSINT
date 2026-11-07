@@ -1,0 +1,33 @@
+# ====================================================================
+# Recon-ng Automated Reconnaissance Resource Script (.rc)
+# Usage: .\recon-ng.bat -r sample_recon.rc
+# ====================================================================
+
+# 1. Create or load a dedicated workspace
+workspaces create automated_audit
+
+# 2. Insert target domain (change 'example.com' to your target domain)
+db insert domains example.com
+
+# 3. Passive Subdomain Discovery via Certificate Transparency logs (No API key needed)
+modules load recon/domains-hosts/certificate_transparency
+run
+
+# 4. Passive Subdomain Discovery via HackerTarget (No API key needed)
+modules load recon/domains-hosts/hackertarget
+run
+
+# 5. Resolve all discovered hosts to IP addresses
+modules load recon/hosts-hosts/resolve
+run
+
+# 6. Display all collected targets and resolved hosts
+show domains
+show hosts
+
+# 7. Generate a comprehensive HTML report
+modules load reporting/html
+options set CREATOR AutomatedOSINT
+options set CUSTOMER TargetOrganization
+run
+
