@@ -1,5 +1,35 @@
-*.pyc
-*.rdb
-*sublime*
+# Byte-compiled / optimized / DLL files
+__pycache__/
+*.py[cod]
+*$py.class
+*.pyd
+
+# Virtual Environments
 venv/
+.venv/
+env/
+ENV/
+
+# Databases & cache
+*.rdb
+*.db
+*.sqlite
+*.sqlite3
+
+# Logs & exports
+*.log
+report.html
+export.*
+
+# Environment variables & secrets
+.env
+.env.*
+!.env.example
+
+# Editor directories
+.vscode/
+.idea/
+*sublime*
+
+# Local custom scripts
 scripts/
