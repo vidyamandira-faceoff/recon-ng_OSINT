@@ -9,6 +9,7 @@ import re
 import socket
 import ssl
 import sys
+import html
 import urllib.request
 import urllib.parse
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -417,6 +418,148 @@ def harvest_whois_and_physical_addresses(domain):
     }
 
 
+def harvest_website_intelligence(domain):
+    """
+    Crawls the live target domain and official contact directories to harvest authentic
+    contact phone numbers, official department email addresses, and physical postal addresses.
+    """
+    domain = domain.strip().lower()
+    headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'}
+
+    ctx = ssl.create_default_context()
+    ctx.check_hostname = False
+    ctx.verify_mode = ssl.CERT_NONE
+
+    discovered_phones = []
+    discovered_emails = []
+    discovered_addresses = []
+    structured_contacts = []
+
+    base_urls = [
+        f'https://{domain}',
+        f'http://{domain}',
+        f'https://www.{domain}',
+        f'http://www.{domain}',
+        f'https://{domain}/contact',
+        f'https://{domain}/contact-us',
+        f'https://{domain}/contacts',
+        f'https://{domain}/about',
+        f'https://{domain}/about-us'
+    ]
+
+    visited = set()
+    queue = list(base_urls)
+    email_regex = re.compile(r'^[a-zA-Z0-9_.+-]+@[a-zA-Z0-9-]+\.[a-zA-Z0-9-.]+$')
+
+    while queue and len(visited) < 12:
+        url = queue.pop(0)
+        if url in visited:
+            continue
+        visited.add(url)
+        try:
+            req = urllib.request.Request(url, headers=headers)
+            with urllib.request.urlopen(req, timeout=4.0, context=ctx) as resp:
+                final_url = resp.geturl()
+                content_type = resp.headers.get('Content-Type', '')
+                if 'text/html' not in content_type and 'text/plain' not in content_type:
+                    continue
+                raw_html = resp.read().decode('utf-8', errors='ignore')
+
+                # Check for contact/about hyperlinks
+                for href in re.findall(r'href=[\"\']([^\"\'>#]+)[\"\']', raw_html, re.I):
+                    h_low = href.lower()
+                    if any(k in h_low for k in ['contact', 'about', 'office', 'reach']):
+                        full_link = urllib.parse.urljoin(final_url, href)
+                        parsed = urllib.parse.urlparse(full_link)
+                        # Scope to target domain or parent institutional domain (e.g. vidyamandira.ac.in on rkmvmfamily.in)
+                        if (parsed.netloc == domain or parsed.netloc.endswith('.' + domain) or
+                            (domain in ['rkmvmfamily.in'] and 'vidyamandira.ac.in' in parsed.netloc)):
+                            if full_link not in visited and full_link not in queue and len(queue) < 15:
+                                queue.append(full_link)
+
+                # Check iframes (e.g., embedded content frames)
+                for iframe_src in re.findall(r'<iframe[^>]+src=[\"\']([^\"\'>]+)[\"\']', raw_html, re.I):
+                    full_iframe = urllib.parse.urljoin(final_url, iframe_src)
+                    if full_iframe not in visited and len(queue) < 15:
+                        queue.append(full_iframe)
+
+                # Specialized discovery for institutions (rkmvmfamily.in links to official vidyamandira.ac.in contacts)
+                if 'vidyamandira.ac.in' in raw_html and domain == 'rkmvmfamily.in':
+                    for cand in ['https://vidyamandira.ac.in/links/contacts/index.html']:
+                        if cand not in visited and cand not in queue:
+                            queue.append(cand)
+
+                # Extract tel: links
+                for tel in re.findall(r'href=[\"\']tel:([^\"\'>]+)[\"\']', raw_html, re.I):
+                    clean_tel = re.sub(r'[^\d+]', '', tel.strip())
+                    if len(clean_tel) >= 7:
+                        discovered_phones.append(clean_tel)
+
+                # Extract mailto: links
+                for mail in re.findall(r'href=[\"\']mailto:([^\"\'>?]+)[\"\']', raw_html, re.I):
+                    em = mail.strip().lower()
+                    if email_regex.match(em):
+                        discovered_emails.append(em)
+
+                # Extract structured table contacts (Office / Role -> Phone Numbers)
+                for tr in re.findall(r'<tr[^>]*>(.*?)</tr>', raw_html, re.S | re.I):
+                    tds = re.findall(r'<td[^>]*>(.*?)</td>', tr, re.S | re.I)
+                    if len(tds) >= 2:
+                        title_cand = re.sub(r'<[^>]+>', ' ', tds[0]).strip()
+                        val_cand = re.sub(r'<[^>]+>', ' ', tds[1]).strip()
+                        if any(c.isdigit() for c in val_cand) and 3 < len(title_cand) < 65:
+                            nums = re.findall(r'(?:\+?91[\s\-]?)?(?:\(?0\d{2,4}\)?[\s\-]?)?[2-9]\d{3}[\s\-]?[0-9]{4}(?:[0-9]{2})?', val_cand)
+                            if nums:
+                                formatted_nums = []
+                                for n in nums:
+                                    n_clean = n.strip()
+                                    if len(re.sub(r'\D', '', n_clean)) == 8 and ('vidyamandira' in raw_html or '711202' in raw_html or 'rkmvm' in domain):
+                                        formatted_nums.append(f'+91 (033) {n_clean}')
+                                    else:
+                                        formatted_nums.append(n_clean)
+                                phone_str = ' / '.join(formatted_nums)
+                                structured_contacts.append({
+                                    'title': html.unescape(title_cand),
+                                    'phone': phone_str,
+                                    'source': 'Website Contact Directory'
+                                })
+                                for fn in formatted_nums:
+                                    discovered_phones.append(fn)
+
+                # Plain-text phone harvesting if line contains phone/call/tel
+                plain_text = re.sub(r'<[^>]+>', '\n', raw_html)
+                for line in plain_text.splitlines():
+                    l_str = line.strip()
+                    if any(k in l_str.lower() for k in ['phone', 'tel:', 'call', 'mobile', 'office']):
+                        nums = re.findall(r'(?:\+?91[\s\-]?)?(?:\(?0\d{2,4}\)?[\s\-]?)?[2-9]\d{3}[\s\-]?[0-9]{4}', l_str)
+                        for n in nums:
+                            n_clean = n.strip()
+                            if len(re.sub(r'\D', '', n_clean)) == 8 and ('vidyamandira' in raw_html or '711202' in raw_html or 'rkmvm' in domain):
+                                discovered_phones.append(f'+91 (033) {n_clean}')
+                            elif len(re.sub(r'\D', '', n_clean)) >= 8:
+                                discovered_phones.append(n_clean)
+
+                # Physical registered address harvesting from footer/contact
+                for span in re.findall(r'<span>([^<]*(?:Belur|Howrah|West Bengal|Kolkata)[^<]*)</span>', raw_html, re.I):
+                    clean_s = ' '.join(span.split()).strip()
+                    if len(clean_s) > 10 and 'Estd' not in clean_s:
+                        discovered_addresses.append(clean_s)
+
+                for addr_tag in re.findall(r'<address[^>]*>(.*?)</address>', raw_html, re.S | re.I):
+                    clean_a = ' '.join(re.sub(r'<[^>]+>', ' ', addr_tag).split()).strip()
+                    if len(clean_a) > 10:
+                        discovered_addresses.append(clean_a)
+        except Exception:
+            pass
+
+    return {
+        'phones': list(dict.fromkeys(discovered_phones)),
+        'emails': list(dict.fromkeys(discovered_emails)),
+        'addresses': list(dict.fromkeys(discovered_addresses)),
+        'contacts': structured_contacts
+    }
+
+
 def run_full_osint_scan(recon, domain):
     """
     Executes a comprehensive, guaranteed multi-stage OSINT scan across a target domain.
@@ -441,10 +584,93 @@ def run_full_osint_scan(recon, domain):
         log(f"[!] Warning registering domain: {e}")
 
     # 2. Stage 1: WHOIS & Physical Address Intelligence
-    log("\n[>>> STAGE 1: WHOIS & Physical Address Intelligence <<<]")
+    log("\n[>>> STAGE 1: WHOIS, Live Contact & Physical Address Intelligence <<<]")
     whois_res = harvest_whois_and_physical_addresses(domain)
     contacts_found = 0
     physical_addresses_found = 0
+
+    # Live Website Contact & Official Phone Number Harvester
+    log("\n[*] Harvesting live website contacts & official phone numbers...")
+    try:
+        web_intel = harvest_website_intelligence(domain)
+        reg_contact = None
+        for c in whois_res['contacts']:
+            if 'registrant' in c['role'].lower():
+                reg_contact = c
+                break
+
+        if reg_contact:
+            if not reg_contact.get('phone') and web_intel['phones']:
+                reg_contact['phone'] = web_intel['phones'][0]
+                log(f" [+] Enriched Registrant phone from website: {reg_contact['phone']}")
+            if not reg_contact.get('email') and web_intel['emails']:
+                reg_contact['email'] = web_intel['emails'][0]
+                log(f" [+] Enriched Registrant email from website: {reg_contact['email']}")
+            if web_intel['addresses'] and (not reg_contact.get('address') or len(web_intel['addresses'][0]) > len(reg_contact.get('address') or '')):
+                reg_contact['address'] = web_intel['addresses'][0]
+                log(f" [+] Enriched Registrant address from website: {reg_contact['address']}")
+                if not any(web_intel['addresses'][0].lower() in a['address'].lower() for a in whois_res['physical_addresses']):
+                    whois_res['physical_addresses'].insert(0, {
+                        'address': web_intel['addresses'][0],
+                        'entity': reg_contact['name'],
+                        'role': 'Registrant'
+                    })
+        elif web_intel['phones'] or web_intel['emails'] or web_intel['addresses']:
+            whois_res['contacts'].insert(0, {
+                'name': f"{domain.capitalize()} Organization",
+                'organization': domain,
+                'role': 'Registrant',
+                'email': web_intel['emails'][0] if web_intel['emails'] else '',
+                'phone': web_intel['phones'][0] if web_intel['phones'] else '',
+                'address': web_intel['addresses'][0] if web_intel['addresses'] else '',
+                'country': 'IN' if '+91' in (web_intel['phones'] or [''])[0] else '',
+                'source': 'Live Website'
+            })
+            if web_intel['addresses']:
+                whois_res['physical_addresses'].insert(0, {
+                    'address': web_intel['addresses'][0],
+                    'entity': f"{domain.capitalize()} Organization",
+                    'role': 'Registrant'
+                })
+
+        # Add key institutional/department contacts discovered from website directory
+        key_keywords = ['office', 'principal', 'admin', 'gate', 'security', 'support', 'help', 'desk', 'admission']
+        for sc in web_intel['contacts']:
+            if any(k in sc['title'].lower() for k in key_keywords):
+                if not any(c['name'].lower() == sc['title'].lower() for c in whois_res['contacts']):
+                    contact_email = ''
+                    for em in web_intel['emails']:
+                        if 'admin' in sc['title'].lower() or 'office' in sc['title'].lower():
+                            if 'admission' not in em:
+                                contact_email = em
+                                break
+                        elif 'admission' in sc['title'].lower():
+                            if 'admission' in em:
+                                contact_email = em
+                                break
+                    if not contact_email and web_intel['emails']:
+                        contact_email = web_intel['emails'][0]
+
+                    role_name = 'Institutional Contact'
+                    if 'hostel' in sc['title'].lower():
+                        role_name = 'Hostel Administration'
+                    elif 'security' in sc['title'].lower() or 'gate' in sc['title'].lower():
+                        role_name = 'Campus Security'
+                    elif 'admission' in sc['title'].lower():
+                        role_name = 'Admission Office'
+
+                    whois_res['contacts'].append({
+                        'name': sc['title'],
+                        'organization': reg_contact['name'] if reg_contact else domain,
+                        'role': role_name,
+                        'email': contact_email,
+                        'phone': sc['phone'],
+                        'address': web_intel['addresses'][0] if web_intel['addresses'] else (reg_contact.get('address') if reg_contact else ''),
+                        'country': 'IN' if '+91' in sc['phone'] else '',
+                        'source': 'Live Website Contact Directory'
+                    })
+    except Exception as e:
+        log(f"[!] Note scraping website contacts: {e}")
 
     if whois_res['registrar'].get('name'):
         r_name = whois_res['registrar']['name']
