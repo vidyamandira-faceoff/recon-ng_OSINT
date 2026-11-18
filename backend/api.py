@@ -67,38 +67,42 @@ class TaskList(Resource):
             abort(404)
         tid = str(uuid.uuid4())
         tasks.add_task(tid, 'queued')
-        try:
-            job = current_app.task_queue.enqueue('recon.core.tasks.run_module', current_app.config['WORKSPACE'], path, job_id=tid)
-            tasks.update_task(tid, status='running')
-            return {
-                'task': tid,
-                'queued': 'redis',
-            }, 201
-        except Exception:
-            def worker():
-                buf = io.StringIO()
-                old_out = sys.stdout
-                sys.stdout = buf
-                results = {}
-                try:
-                    tasks.update_task(tid, status='running')
-                    mod = recon._loaded_modules[path]
-                    mod.do_run(None)
-                    results['summary'] = getattr(mod, '_summary_counts', {})
-                    results['output'] = re.sub(r'\x1B(?:[@-Z\\-_]|\[[0-?]*[ -/]*[@-~])', '', buf.getvalue())
-                    tasks.update_task(tid, status='finished', result=results)
-                except Exception as e:
-                    results['error'] = {'type': type(e).__name__, 'message': str(e)}
-                    results['output'] = re.sub(r'\x1B(?:[@-Z\\-_]|\[[0-?]*[ -/]*[@-~])', '', buf.getvalue())
-                    tasks.update_task(tid, status='failed', result=results)
-                finally:
-                    sys.stdout = old_out
-            t = threading.Thread(target=worker, daemon=True)
-            t.start()
-            return {
-                'task': tid,
-                'queued': 'thread',
-            }, 201
+        if getattr(current_app, 'task_queue', None):
+            try:
+                job = current_app.task_queue.enqueue('recon.core.tasks.run_module', current_app.config['WORKSPACE'], path, job_id=tid)
+                tasks.update_task(tid, status='running')
+                return {
+                    'task': tid,
+                    'queued': 'redis',
+                }, 201
+            except Exception:
+                pass
+        # Fallback to in-process background worker thread if redis is unavailable
+        def worker():
+            buf = io.StringIO()
+            old_out = sys.stdout
+            sys.stdout = buf
+            results = {}
+            try:
+                tasks.update_task(tid, status='running')
+                mod = recon._loaded_modules[path]
+                mod.do_run(None)
+                results['summary'] = getattr(mod, '_summary_counts', {})
+                results['output'] = re.sub(r'\x1B(?:[@-Z\\-_]|\[[0-?]*[ -/]*[@-~])', '', buf.getvalue())
+                tasks.update_task(tid, status='finished', result=results)
+            except Exception as e:
+                results['error'] = {'type': type(e).__name__, 'message': str(e)}
+                results['output'] = re.sub(r'\x1B(?:[@-Z\\-_]|\[[0-?]*[ -/]*[@-~])', '', buf.getvalue())
+                tasks.update_task(tid, status='failed', result=results)
+            finally:
+                sys.stdout = old_out
+
+        t = threading.Thread(target=worker, daemon=True)
+        t.start()
+        return {
+            'task': tid,
+            'queued': 'thread',
+        }, 201
 
 api.add_resource(TaskList, '/tasks/')
 
@@ -136,10 +140,14 @@ class TaskInst(Resource):
                 'status': 'unknown',
                 'result': None,
             }
-            job = current_app.task_queue.fetch_job(tid)
-            if job:
-                task['status'] = job.get_status()
-                task['result'] = job.result
+            if getattr(current_app, 'task_queue', None):
+                try:
+                    job = current_app.task_queue.fetch_job(tid)
+                    if job:
+                        task['status'] = job.get_status()
+                        task['result'] = job.result
+                except Exception:
+                    pass
         else:
             task = tasks.get_task(tid)
         return task
@@ -560,6 +568,17 @@ class TableInst(Resource):
             rows = recon.query(f'SELECT rowid, * FROM "{table}"', include_header=True)
         columns = rows.pop(0)
         rows = columnize(columns, rows)
+        target_domain = request.args.get('domain')
+        if target_domain:
+            target_domain = target_domain.strip().lower()
+            if table in ['hosts', 'ports']:
+                rows = [r for r in rows if r.get('host', '').lower() == target_domain or r.get('host', '').lower().endswith('.' + target_domain)]
+            elif table == 'contacts':
+                rows = [r for r in rows if target_domain in str(r.get('notes', '')).lower() or target_domain in str(r.get('email', '')).lower()]
+            elif table == 'locations':
+                rows = [r for r in rows if target_domain in str(r.get('notes', '')).lower() or target_domain in str(r.get('street_address', '')).lower()]
+            elif table == 'domains':
+                rows = [r for r in rows if r.get('domain', '').lower() == target_domain]
         # dynamically determine and call export function
         _format = request.args.get('format')
         if _format and _format in EXPORTS:
@@ -627,9 +646,15 @@ class ModuleRun(Resource):
         for opt in options:
             name = opt.get('name')
             val = opt.get('value')
-            if name and name in mod.options:
-                mod.options[name] = val
-                mod._save_config(name)
+            if name:
+                for opt_key in list(mod.options.keys()):
+                    if opt_key.lower() == name.lower():
+                        mod.options[opt_key] = val
+                        try:
+                            mod._save_config(opt_key)
+                        except Exception:
+                            pass
+                        break
         
         buf = io.StringIO()
         old_stdout = sys.stdout
@@ -656,6 +681,108 @@ class ModuleRun(Resource):
         }
 
 api.add_resource(ModuleRun, '/modules/<path:module>/run')
+
+
+from backend.scanner import run_full_osint_scan
+
+
+class FullScan(Resource):
+
+    def post(self):
+        '''
+        Launches an automated comprehensive OSINT scan across a target domain
+        '''
+        data = request.json or {}
+        domain = data.get('domain', '').strip().lower()
+        if not domain:
+            abort(400, description="Domain is required for full scan.")
+
+        # Wipe previous records for this domain before re-scanning so old dirty/duplicate data never persists
+        recon.query('DELETE FROM hosts WHERE host LIKE ? OR host = ?', (f'%.{domain}', domain))
+        recon.query('DELETE FROM ports WHERE host LIKE ? OR host = ?', (f'%.{domain}', domain))
+        recon.query('DELETE FROM contacts WHERE notes LIKE ? OR email LIKE ?', (f'%{domain}%', f'%{domain}%'))
+        recon.query('DELETE FROM locations WHERE notes LIKE ? OR street_address LIKE ?', (f'%{domain}%', f'%{domain}%'))
+        recon.query('DELETE FROM domains WHERE domain = ?', (domain,))
+
+        return run_full_osint_scan(recon, domain)
+
+api.add_resource(FullScan, '/scan/full')
+
+
+class HistoryList(Resource):
+
+    def get(self):
+        '''
+        Gets all past scan history entries
+        '''
+        recon.query('''
+            CREATE TABLE IF NOT EXISTS scan_history (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                domain TEXT UNIQUE,
+                timestamp TEXT,
+                hosts_count INTEGER DEFAULT 0,
+                contacts_count INTEGER DEFAULT 0,
+                ports_count INTEGER DEFAULT 0,
+                locations_count INTEGER DEFAULT 0
+            )
+        ''')
+        raw = recon.query('SELECT domain, timestamp, hosts_count, contacts_count, ports_count, locations_count FROM scan_history ORDER BY id DESC')
+        history = []
+        for r in raw:
+            history.append({
+                'domain': r[0],
+                'timestamp': r[1],
+                'hosts_count': r[2],
+                'contacts_count': r[3],
+                'ports_count': r[4],
+                'locations_count': r[5]
+            })
+        # If scan_history is empty, backfill from domains
+        if not history:
+            domains = recon.query('SELECT DISTINCT domain FROM domains')
+            for d in domains:
+                dom = d[0]
+                h_cnt = len(recon.query("SELECT * FROM hosts WHERE host LIKE ? OR host = ?", (f'%.{dom}', dom)))
+                c_cnt = len(recon.query("SELECT * FROM contacts WHERE notes LIKE ? OR email LIKE ?", (f'%{dom}%', f'%{dom}%')))
+                p_cnt = len(recon.query("SELECT * FROM ports WHERE host LIKE ? OR host = ?", (f'%.{dom}', dom)))
+                now_str = 'Previous Scan'
+                recon.query("INSERT OR IGNORE INTO scan_history (domain, timestamp, hosts_count, contacts_count, ports_count, locations_count) VALUES (?, ?, ?, ?, ?, ?)",
+                            (dom, now_str, h_cnt, c_cnt, p_cnt, 0))
+                history.append({
+                    'domain': dom,
+                    'timestamp': now_str,
+                    'hosts_count': h_cnt,
+                    'contacts_count': c_cnt,
+                    'ports_count': p_cnt,
+                    'locations_count': 0
+                })
+        return {'history': history}
+
+    def delete(self):
+        '''
+        Clears all scan history
+        '''
+        recon.query('DELETE FROM scan_history')
+        return {'message': 'Scan history cleared.'}
+
+
+class HistoryInst(Resource):
+
+    def delete(self, domain):
+        '''
+        Deletes a specific domain from history and wipes its corresponding records
+        '''
+        domain = domain.strip().lower()
+        recon.query('DELETE FROM scan_history WHERE domain = ?', (domain,))
+        recon.query('DELETE FROM domains WHERE domain = ?', (domain,))
+        recon.query('DELETE FROM hosts WHERE host LIKE ? OR host = ?', (f'%.{domain}', domain))
+        recon.query('DELETE FROM ports WHERE host LIKE ? OR host = ?', (f'%.{domain}', domain))
+        recon.query('DELETE FROM contacts WHERE notes LIKE ? OR email LIKE ?', (f'%{domain}%', f'%{domain}%'))
+        recon.query('DELETE FROM locations WHERE notes LIKE ? OR street_address LIKE ?', (f'%{domain}%', f'%{domain}%'))
+        return {'message': f"Deleted scan history and records for '{domain}'."}
+
+api.add_resource(HistoryList, '/history')
+api.add_resource(HistoryInst, '/history/<string:domain>')
 
 
 class KeyList(Resource):
@@ -755,3 +882,54 @@ class ExportList(Resource):
         }
 
 api.add_resource(ExportList, '/exports')
+
+
+class MarketplaceList(Resource):
+
+    def get(self):
+        '''
+        Gets all available modules from the marketplace
+        '''
+        if not getattr(recon, '_module_index', None):
+            try:
+                recon._fetch_module_index()
+                recon._update_module_index()
+            except Exception:
+                pass
+        return {
+            'modules': getattr(recon, '_module_index', []) or []
+        }
+
+    def post(self):
+        '''
+        Refreshes the marketplace index or installs modules
+        '''
+        data = request.json or {}
+        action = data.get('action', 'install')
+        target = data.get('module', 'core')
+
+        try:
+            recon._fetch_module_index()
+            recon._update_module_index()
+            if action == 'install':
+                if target == 'core':
+                    targets = ['hackertarget', 'certificate_transparency', 'resolve']
+                    for t in targets:
+                        try:
+                            recon._do_marketplace_install(t)
+                        except Exception:
+                            pass
+                else:
+                    recon._do_marketplace_install(target)
+                recon._load_modules()
+                return {
+                    'status': 'success',
+                    'message': f"Installed '{target}' successfully.",
+                    'loaded_modules': sorted(list(recon._loaded_modules.keys()))
+                }
+            return {'status': 'success', 'message': 'Marketplace refreshed.'}
+        except Exception as e:
+            return {'status': 'error', 'message': str(e)}, 500
+
+api.add_resource(MarketplaceList, '/marketplace/')
+
