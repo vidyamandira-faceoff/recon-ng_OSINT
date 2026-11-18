@@ -1,7 +1,7 @@
 from flask import current_app, send_file, Response, render_template
 from io import BytesIO
-from recon.core.web import recon
-from recon.core.web.utils import columnize, add_worksheet
+from backend import recon
+from backend.utils import columnize, add_worksheet
 import xlsxwriter
 
 def xlsx():

@@ -63,7 +63,16 @@ class Recon(framework.Framework):
         # set path variables
         self.app_path = framework.Framework.app_path = sys.path[0]
         self.core_path = framework.Framework.core_path = os.path.join(self.app_path, 'core')
-        self.home_path = framework.Framework.home_path = os.path.join(os.path.expanduser('~'), '.recon-ng')
+        target_home = os.environ.get('RECON_HOME') or os.path.join(os.path.expanduser('~'), '.recon-ng')
+        try:
+            os.makedirs(target_home, exist_ok=True)
+            self.home_path = framework.Framework.home_path = target_home
+        except (OSError, PermissionError):
+            self.home_path = framework.Framework.home_path = os.path.join(self.app_path, '.recon-ng')
+            try:
+                os.makedirs(self.home_path, exist_ok=True)
+            except Exception:
+                pass
         self.mod_path = framework.Framework.mod_path = os.path.join(self.home_path, 'modules')
         self.data_path = framework.Framework.data_path = os.path.join(self.home_path, 'data')
         self.spaces_path = framework.Framework.spaces_path = os.path.join(self.home_path, 'workspaces')
@@ -95,11 +104,27 @@ class Recon(framework.Framework):
     def _init_home(self):
         # initialize home folder
         if not os.path.exists(self.home_path):
-            os.makedirs(self.home_path)
+            try:
+                os.makedirs(self.home_path, exist_ok=True)
+            except (OSError, PermissionError):
+                self.home_path = framework.Framework.home_path = os.path.join(self.app_path, '.recon-ng')
+                self.mod_path = framework.Framework.mod_path = os.path.join(self.home_path, 'modules')
+                self.data_path = framework.Framework.data_path = os.path.join(self.home_path, 'data')
+                self.spaces_path = framework.Framework.spaces_path = os.path.join(self.home_path, 'workspaces')
+                try:
+                    os.makedirs(self.home_path, exist_ok=True)
+                except Exception:
+                    pass
         # initialize keys database
-        self._query_keys('CREATE TABLE IF NOT EXISTS keys (name TEXT PRIMARY KEY, value TEXT)')
+        try:
+            self._query_keys('CREATE TABLE IF NOT EXISTS keys (name TEXT PRIMARY KEY, value TEXT)')
+        except Exception:
+            pass
         # initialize module index
-        self._fetch_module_index()
+        try:
+            self._fetch_module_index()
+        except Exception:
+            pass
 
     def _check_version(self):
         if self._check:
@@ -373,18 +398,29 @@ class Recon(framework.Framework):
         path = os.path.join(self.home_path, 'modules.yml')
         if os.path.exists(path):
             with open(path, 'r') as infile:
-                self._module_index = yaml.safe_load(infile)
+                self._module_index = yaml.safe_load(infile) or []
             # add status to index for each module
             for module in self._module_index:
                 status = 'not installed'
-                if module['path'] in self._loaded_category.get('disabled', []):
+                if module.get('path') in self._loaded_category.get('disabled', []):
                     status = 'disabled'
-                elif module['path'] in self._loaded_modules.keys():
+                elif module.get('path') in self._loaded_modules.keys():
                     status = 'installed'
                     loaded = self._loaded_modules[module['path']]
-                    if loaded.meta['version'] != module['version']:
+                    if loaded.meta.get('version') != module.get('version'):
                         status = 'outdated'
                 module['status'] = status
+        # ensure all loaded modules are represented in the index
+        for mod_path, mod_obj in self._loaded_modules.items():
+            if not any(m.get('path') == mod_path for m in self._module_index):
+                self._module_index.append({
+                    'path': mod_path,
+                    'name': getattr(mod_obj, 'meta', {}).get('name', mod_path.split('/')[-1]),
+                    'description': getattr(mod_obj, 'meta', {}).get('description', ''),
+                    'author': getattr(mod_obj, 'meta', {}).get('author', 'Unknown'),
+                    'version': getattr(mod_obj, 'meta', {}).get('version', '1.0'),
+                    'status': 'installed'
+                })
 
     def _search_module_index(self, s):
         keys = ('path', 'name', 'description', 'status')
@@ -445,32 +481,54 @@ class Recon(framework.Framework):
     def _load_modules(self):
         self._loaded_category = {}
         self._loaded_modules = framework.Framework._loaded_modules = {}
-        # crawl the module directory and build the module tree
-        for dirpath, dirnames, filenames in os.walk(self.mod_path, followlinks=True):
-            # remove hidden files and directories
-            filenames = [f for f in filenames if not f[0] == '.']
-            dirnames[:] = [d for d in dirnames if not d[0] == '.']
-            if len(filenames) > 0:
-                for filename in [f for f in filenames if f.endswith('.py')]:
-                    self._load_module(dirpath, filename)
-        # cleanup module directory
-        self._remove_empty_dirs(self.mod_path)
+        # crawl module directories (both home ~/.recon-ng/modules and app repo modules/)
+        search_dirs = [self.mod_path, os.path.join(self.app_path, 'modules')]
+        for search_dir in search_dirs:
+            if not os.path.exists(search_dir):
+                continue
+            for dirpath, dirnames, filenames in os.walk(search_dir, followlinks=True):
+                # remove hidden files and directories
+                filenames = [f for f in filenames if not f[0] == '.']
+                dirnames[:] = [d for d in dirnames if not d[0] == '.']
+                if len(filenames) > 0:
+                    for filename in [f for f in filenames if f.endswith('.py')]:
+                        self._load_module(dirpath, filename)
+            # cleanup module directory if possible
+            try:
+                self._remove_empty_dirs(search_dir)
+            except Exception:
+                pass
         # update module index
         self._update_module_index()
 
     def _load_module(self, dirpath, filename):
         mod_name = filename.split('.')[0]
         norm_dirpath = dirpath.replace('\\', '/')
-        mod_category = re.search('/modules/([^/]*)', norm_dirpath).group(1)
-        mod_dispname = '/'.join(re.split('/modules/', norm_dirpath)[-1].split('/') + [mod_name])
-        mod_loadname = mod_dispname.replace('/', '_')
+        if '/modules/' in norm_dirpath:
+            rel_dir = norm_dirpath.split('/modules/', 1)[1]
+        elif norm_dirpath.startswith('modules/'):
+            rel_dir = norm_dirpath[len('modules/'):]
+        elif norm_dirpath == 'modules':
+            rel_dir = ''
+        else:
+            rel_dir = os.path.basename(norm_dirpath)
+
+        path_parts = [p for p in rel_dir.split('/') if p]
+        mod_category = path_parts[0] if path_parts else 'recon'
+        mod_dispname = '/'.join(path_parts + [mod_name])
+        mod_loadname = mod_dispname.replace('/', '_').replace('-', '_')
         mod_loadpath = os.path.join(dirpath, filename)
         try:
-            # import the module into memory
-            mod = SourceFileLoader(mod_loadname, mod_loadpath).load_module()
-            __import__(mod_loadname)
+            # import the module into memory using modern importlib
+            import importlib.util
+            spec = importlib.util.spec_from_file_location(mod_loadname, mod_loadpath)
+            if not spec or not spec.loader:
+                raise ImportError(f"Could not load spec for {mod_loadpath}")
+            mod = importlib.util.module_from_spec(spec)
+            sys.modules[mod_loadname] = mod
+            spec.loader.exec_module(mod)
             # add the module to the framework's loaded modules
-            self._loaded_modules[mod_dispname] = sys.modules[mod_loadname].Module(mod_dispname)
+            self._loaded_modules[mod_dispname] = mod.Module(mod_dispname)
             self._categorize_module(mod_category, mod_dispname)
             # return indication of success to support module reload
             return True

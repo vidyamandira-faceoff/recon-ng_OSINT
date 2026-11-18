@@ -2,10 +2,17 @@ from flask import Flask, cli, render_template
 from flasgger import Swagger
 from recon.core import base
 from recon.core.constants import BANNER_WEB
-from recon.core.web.db import Tasks
-from redis import Redis
+from backend.db import Tasks
 import os
-import rq
+
+try:
+    from redis import Redis
+    import rq
+    HAS_REDIS = True
+except ImportError:
+    HAS_REDIS = False
+    Redis = None
+    rq = None
 
 # disable the development server warning banner
 cli.show_server_banner = lambda *x: None
@@ -13,7 +20,7 @@ cli.show_server_banner = lambda *x: None
 print(BANNER_WEB)
 
 # create an application-wide framework and tasks instance
-recon = base.Recon(check=False, analytics=False, marketplace=False)
+recon = base.Recon(check=False, analytics=False, marketplace=True)
 recon.start(base.Mode.WEB)
 tasks = Tasks(recon)
 
@@ -37,14 +44,32 @@ print((f" * Workspace initialized: {WORKSPACE}"))
 
 def create_app():
 
-    # setting the static_url_path to blank serves static files from the web root
-    app = Flask(__name__, static_url_path='')
+    root_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    template_dir = os.path.join(root_dir, 'frontend', 'templates')
+    static_dir = os.path.join(root_dir, 'frontend', 'static')
+
+    # Setting static_url_path to blank serves static files from the web root
+    app = Flask(
+        __name__,
+        template_folder=template_dir,
+        static_folder=static_dir,
+        static_url_path=''
+    )
     app.config.from_object(__name__)
 
-    Swagger(app, template_file='definitions.yaml')
+    definitions_path = os.path.join(os.path.dirname(__file__), 'definitions.yaml')
+    Swagger(app, template_file=definitions_path)
 
-    app.redis = Redis.from_url(app.config['REDIS_URL'])
-    app.task_queue = rq.Queue('recon-tasks', connection=app.redis)
+    if HAS_REDIS and app.config.get('REDIS_URL'):
+        try:
+            app.redis = Redis.from_url(app.config['REDIS_URL'])
+            app.task_queue = rq.Queue('recon-tasks', connection=app.redis)
+        except Exception:
+            app.redis = None
+            app.task_queue = None
+    else:
+        app.redis = None
+        app.task_queue = None
 
     @app.after_request
     def disable_cache(response):
@@ -55,7 +80,7 @@ def create_app():
     def index():
         return render_template('index.html', workspaces=recon._get_workspaces())
 
-    from recon.core.web.api import resources
+    from backend.api import resources
     app.register_blueprint(resources)
 
     return app

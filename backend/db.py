@@ -1,4 +1,4 @@
-from recon.core.web.utils import columnize
+from backend.utils import columnize
 import json
 import os
 

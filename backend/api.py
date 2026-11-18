@@ -1,8 +1,8 @@
 from flask import Blueprint, current_app, request, abort
 from flask_restful import Resource, Api
-from recon.core.web import recon, tasks
-from recon.core.web.utils import columnize
-from recon.core.web.constants import EXPORTS, REPORTS
+from backend import recon, tasks
+from backend.utils import columnize
+from backend.constants import EXPORTS, REPORTS
 import io
 import os
 import re

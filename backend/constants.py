@@ -1,5 +1,5 @@
-from recon.core.web.exports import _jsonify, csvify, xmlify, listify, xlsxify, proxify
-from recon.core.web.reports import xlsx, pushpin
+from backend.exports import _jsonify, csvify, xmlify, listify, xlsxify, proxify
+from backend.reports import xlsx, pushpin
 
 EXPORTS = {
     'json': _jsonify,

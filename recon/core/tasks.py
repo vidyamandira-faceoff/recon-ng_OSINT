@@ -1,6 +1,9 @@
 from recon.core import base
-from recon.core.web.db import Tasks
-from rq import get_current_job
+from backend.db import Tasks
+try:
+    from rq import get_current_job
+except ImportError:
+    get_current_job = lambda: None
 import traceback
 
 # These tasks exist outside the web directory to avoid loading the entire 

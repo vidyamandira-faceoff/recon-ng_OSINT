@@ -5,10 +5,10 @@ lxml
 mechanize
 requests
 # web
-flask
+Flask<2.3
+Werkzeug<3.0
 flask-restful
 flasgger
 dicttoxml
 XlsxWriter
 unicodecsv
-rq

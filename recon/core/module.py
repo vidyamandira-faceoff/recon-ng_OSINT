@@ -19,11 +19,14 @@ from recon.utils import validators
 
 class BaseModule(framework.Framework):
 
+    meta = {}
+
     def __init__(self, params):
         framework.Framework.__init__(self, params)
         self.options = framework.Options()
         # update the meta dictionary by merging the class variable with any frontmatter
-        self.meta = self._merge_dicts(self.meta, self._parse_frontmatter())
+        base_meta = getattr(self, 'meta', {}) or {}
+        self.meta = self._merge_dicts(base_meta, self._parse_frontmatter())
         # register a data source option if a default query is specified in the module
         if self.meta.get('query'):
             self._default_source = self.meta.get('query')
@@ -64,12 +67,22 @@ class BaseModule(framework.Framework):
 
     def _parse_frontmatter(self):
         rel_path = '.'.join([self._modulename, 'py'])
-        abs_path = os.path.join(self.mod_path, rel_path)
+        candidate_paths = [
+            os.path.join(self.mod_path, rel_path),
+            os.path.join(self.app_path, 'modules', rel_path)
+        ]
+        abs_path = None
+        for p in candidate_paths:
+            if os.path.exists(p):
+                abs_path = p
+                break
+        if not abs_path:
+            return {}
         with open(abs_path) as fp:
             state = False
             yaml_src = ''
             for line in fp:
-                 if line == '---\n':
+                 if line.strip() == '---':
                       state = not state
                       continue
                  if state:
@@ -170,7 +183,7 @@ class BaseModule(framework.Framework):
         else:
             sources = [params]
         if not sources:
-            raise framework.FrameworkException('Source contains no input.')
+            raise framework.FrameworkException("Source contains no input. Please add records to the database table under 'Data & Tables', or type a target directly into the 'SOURCE' option (e.g., 'example.com').")
         return sources
 
     #==================================================
