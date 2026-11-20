@@ -24,18 +24,38 @@ COMMON_SUBDOMAINS = [
     'status', 'gateway', 'm', 'mobile', 'cdn', 'test', 'git', 'jira', 'sso',
     'webmail', 'accounts', 'ns1', 'ns2', 'ns3', 'ns4', 'smtp', 'pop', 'imap',
     'ftp', 'pay', 'billing', 'connect', 'dashboard', 'cpanel', 'staging', 'corp',
-    'direct', 'mx', 'dns', 'beta', 'service', 'services', 'ws', 'autodiscover'
+    'direct', 'mx', 'dns', 'beta', 'service', 'services', 'ws', 'autodiscover',
+    'media', 'video', 'videos', 'static', 'assets', 'backup', 'db', 'database',
+    'privacy', 'security', 'old', 'new', 'client', 'help', 'search', 'intranet'
 ]
 
 COMMON_PORTS = [
     (80, 'http'),
     (443, 'https'),
+    (22, 'ssh'),
+    (21, 'ftp'),
+    (25, 'smtp'),
     (8080, 'http-alt'),
     (8443, 'https-alt'),
-    (22, 'ssh'),
-    (25, 'smtp'),
-    (21, 'ftp')
+    (2082, 'cpanel-http'),
+    (2083, 'cpanel-https'),
+    (2095, 'webmail-http'),
+    (2096, 'webmail-https'),
+    (3306, 'mysql'),
+    (5432, 'postgresql')
 ]
+
+
+def clean_domain(domain):
+    """Sanitizes raw domain inputs, stripping protocol schemes, paths, ports, and trailing slashes."""
+    if not domain:
+        return ''
+    domain = domain.strip().lower()
+    if '://' in domain:
+        domain = domain.split('://', 1)[1]
+    domain = domain.split('/', 1)[0]
+    domain = domain.split(':', 1)[0]
+    return domain.strip('. ')
 
 
 def resolve_ip(host, timeout=1.5):
@@ -58,7 +78,7 @@ def resolve_ip(host, timeout=1.5):
 
 
 def get_ip_geo(ip):
-    """Fetches real country, city, coordinates, and ISP/ASN notes."""
+    """Fetches real country, city, coordinates, and ISP/ASN notes with automatic multi-provider fallback."""
     if not ip or ip in _GEO_CACHE:
         return _GEO_CACHE.get(ip)
 
@@ -67,6 +87,7 @@ def get_ip_geo(ip):
         _GEO_CACHE[ip] = res
         return res
 
+    # Provider 1: ip-api.com
     url = f"http://ip-api.com/json/{ip}?fields=status,country,regionName,city,lat,lon,isp,org,as"
     try:
         req = urllib.request.Request(url, headers={'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)'})
@@ -89,47 +110,74 @@ def get_ip_geo(ip):
     except Exception:
         pass
 
+    # Provider 2 Fallback: ipwho.is
+    try:
+        url_fb = f"https://ipwho.is/{ip}"
+        req_fb = urllib.request.Request(url_fb, headers={'User-Agent': 'Mozilla/5.0'})
+        with urllib.request.urlopen(req_fb, timeout=2.5) as resp_fb:
+            data_fb = json.loads(resp_fb.read().decode('utf-8'))
+            if data_fb.get('success'):
+                city = data_fb.get('city') or ''
+                region_name = data_fb.get('region') or ''
+                region_str = f"{region_name}, {city}".strip(', ') if region_name or city else None
+                org_info = (data_fb.get('connection') or {}).get('isp') or (data_fb.get('connection') or {}).get('org') or ''
+                res = {
+                    'country': data_fb.get('country'),
+                    'region': region_str,
+                    'lat': data_fb.get('latitude'),
+                    'lon': data_fb.get('longitude'),
+                    'notes': org_info[:100] if org_info else None
+                }
+                _GEO_CACHE[ip] = res
+                return res
+    except Exception:
+        pass
+
     _GEO_CACHE[ip] = None
     return None
 
 
 def probe_port(target_host, target_ip, port, service, timeout=1.5):
-    """Attempts socket connection and grabs service/server banner."""
+    """Attempts socket connection and grabs service/server banner with deep TLS inspection."""
     target = target_ip or target_host
     try:
         s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         s.settimeout(timeout)
         s.connect((target, port))
         banner = None
-        if service in ['http', 'http-alt']:
-            s.sendall(f"HEAD / HTTP/1.1\r\nHost: {target_host}\r\nUser-Agent: Recon-ng/5.1\r\nConnection: close\r\n\r\n".encode('utf-8'))
-            resp = s.recv(1024).decode('utf-8', errors='ignore')
+        if service in ['http', 'http-alt', 'cpanel-http', 'webmail-http']:
+            s.sendall(f"GET / HTTP/1.1\r\nHost: {target_host}\r\nUser-Agent: Mozilla/5.0 (Windows NT 10.0; Win64; x64)\r\nConnection: close\r\n\r\n".encode('utf-8'))
+            resp = s.recv(2048).decode('utf-8', errors='ignore')
             for line in resp.splitlines():
                 if line.lower().startswith('server:'):
                     banner = line.strip()
                     break
             if not banner and resp:
                 banner = resp.splitlines()[0][:60]
-        elif service in ['https', 'https-alt']:
+        elif service in ['https', 'https-alt', 'cpanel-https', 'webmail-https']:
             try:
                 ctx = ssl.create_default_context()
                 ctx.check_hostname = False
                 ctx.verify_mode = ssl.CERT_NONE
                 with ctx.wrap_socket(s, server_hostname=target_host) as ss:
-                    ss.sendall(f"HEAD / HTTP/1.1\r\nHost: {target_host}\r\nUser-Agent: Recon-ng/5.1\r\nConnection: close\r\n\r\n".encode('utf-8'))
-                    resp = ss.recv(1024).decode('utf-8', errors='ignore')
+                    tls_ver = ss.version() or 'TLS'
+                    ss.sendall(f"GET / HTTP/1.1\r\nHost: {target_host}\r\nUser-Agent: Mozilla/5.0 (Windows NT 10.0; Win64; x64)\r\nConnection: close\r\n\r\n".encode('utf-8'))
+                    resp = ss.recv(2048).decode('utf-8', errors='ignore')
+                    srv = None
                     for line in resp.splitlines():
                         if line.lower().startswith('server:'):
-                            banner = line.strip()
+                            srv = line.strip()
                             break
-                    if not banner and resp:
-                        banner = resp.splitlines()[0][:60]
+                    if srv:
+                        banner = f"{srv} | {tls_ver}"
+                    else:
+                        banner = f"HTTPS ({tls_ver} Active)"
             except Exception:
                 banner = 'HTTPS (TLS Active)'
-        elif service in ['ssh', 'ftp', 'smtp']:
-            resp = s.recv(256).decode('utf-8', errors='ignore').strip()
+        elif service in ['ssh', 'ftp', 'smtp', 'pop3', 'imap']:
+            resp = s.recv(512).decode('utf-8', errors='ignore').strip()
             if resp:
-                banner = resp[:80]
+                banner = resp[:100]
         s.close()
         return port, service, banner or f"{service.upper()} Active"
     except Exception:
@@ -141,7 +189,7 @@ def harvest_whois_and_physical_addresses(domain):
     Harvests authentic WHOIS data, Registrant / Registrar entities, contact details,
     and real physical registered street addresses from RDAP and authoritative socket WHOIS.
     """
-    domain = domain.strip().lower()
+    domain = clean_domain(domain)
     raw_contacts = []
     physical_addresses = []
     registrar_info = {'name': None, 'address': None}
@@ -420,11 +468,13 @@ def harvest_whois_and_physical_addresses(domain):
 
 def harvest_website_intelligence(domain):
     """
-    Crawls the live target domain and official contact directories to harvest authentic
+    Universally crawls the live target domain and official contact directories to harvest authentic
     contact phone numbers, official department email addresses, and physical postal addresses.
+    Uses Schema.org JSON-LD microdata, tel/mailto anchors, table directories, and contact forms.
+    Zero hardcoded domain assumptions.
     """
-    domain = domain.strip().lower()
-    headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'}
+    domain = clean_domain(domain)
+    headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36'}
 
     ctx = ssl.create_default_context()
     ctx.check_hostname = False
@@ -434,6 +484,7 @@ def harvest_website_intelligence(domain):
     discovered_emails = []
     discovered_addresses = []
     structured_contacts = []
+    discovered_org_name = None
 
     base_urls = [
         f'https://{domain}',
@@ -444,115 +495,154 @@ def harvest_website_intelligence(domain):
         f'https://{domain}/contact-us',
         f'https://{domain}/contacts',
         f'https://{domain}/about',
-        f'https://{domain}/about-us'
+        f'https://{domain}/about-us',
+        f'https://{domain}/privacy'
     ]
 
     visited = set()
     queue = list(base_urls)
     email_regex = re.compile(r'^[a-zA-Z0-9_.+-]+@[a-zA-Z0-9-]+\.[a-zA-Z0-9-.]+$')
 
-    while queue and len(visited) < 12:
+    while queue and len(visited) < 14:
         url = queue.pop(0)
         if url in visited:
             continue
         visited.add(url)
         try:
             req = urllib.request.Request(url, headers=headers)
-            with urllib.request.urlopen(req, timeout=4.0, context=ctx) as resp:
+            with urllib.request.urlopen(req, timeout=3.5, context=ctx) as resp:
                 final_url = resp.geturl()
                 content_type = resp.headers.get('Content-Type', '')
                 if 'text/html' not in content_type and 'text/plain' not in content_type:
                     continue
                 raw_html = resp.read().decode('utf-8', errors='ignore')
 
-                # Check for contact/about hyperlinks
-                for href in re.findall(r'href=[\"\']([^\"\'>#]+)[\"\']', raw_html, re.I):
-                    h_low = href.lower()
-                    if any(k in h_low for k in ['contact', 'about', 'office', 'reach']):
-                        full_link = urllib.parse.urljoin(final_url, href)
-                        parsed = urllib.parse.urlparse(full_link)
-                        # Scope to target domain or parent institutional domain (e.g. vidyamandira.ac.in on rkmvmfamily.in)
-                        if (parsed.netloc == domain or parsed.netloc.endswith('.' + domain) or
-                            (domain in ['rkmvmfamily.in'] and 'vidyamandira.ac.in' in parsed.netloc)):
-                            if full_link not in visited and full_link not in queue and len(queue) < 15:
-                                queue.append(full_link)
+                # 1. Schema.org JSON-LD Extraction (Highest Precision)
+                for block in re.findall(r'<script[^>]+type=[\"\']application/ld\+json[\"\'][^>]*>(.*?)</script>', raw_html, re.S | re.I):
+                    try:
+                        data = json.loads(block)
+                        items = data if isinstance(data, list) else [data]
+                        for item in items:
+                            if item.get('@type') in ['Organization', 'Corporation', 'EducationalOrganization', 'LocalBusiness', 'NGO', 'GovernmentOrganization']:
+                                if item.get('name') and not discovered_org_name:
+                                    discovered_org_name = item.get('name').strip()
+                                if item.get('email'):
+                                    em = item.get('email').strip().lower()
+                                    if email_regex.match(em):
+                                        discovered_emails.append(em)
+                                if item.get('telephone'):
+                                    ph = str(item.get('telephone')).strip()
+                                    if len(re.sub(r'\D', '', ph)) >= 7:
+                                        discovered_phones.append(ph)
 
-                # Check iframes (e.g., embedded content frames)
-                for iframe_src in re.findall(r'<iframe[^>]+src=[\"\']([^\"\'>]+)[\"\']', raw_html, re.I):
-                    full_iframe = urllib.parse.urljoin(final_url, iframe_src)
-                    if full_iframe not in visited and len(queue) < 15:
-                        queue.append(full_iframe)
+                                # PostalAddress
+                                addr_data = item.get('address')
+                                addr_list = addr_data if isinstance(addr_data, list) else ([addr_data] if addr_data else [])
+                                for a in addr_list:
+                                    if isinstance(a, dict):
+                                        parts = [a.get('streetAddress'), a.get('addressLocality'), a.get('addressRegion'), a.get('postalCode'), a.get('addressCountry')]
+                                        parts = [str(p).strip() for p in parts if p]
+                                        if parts:
+                                            discovered_addresses.append(', '.join(parts))
+                                    elif isinstance(a, str) and len(a.strip()) > 8:
+                                        discovered_addresses.append(a.strip())
 
-                # Specialized discovery for institutions (rkmvmfamily.in links to official vidyamandira.ac.in contacts)
-                if 'vidyamandira.ac.in' in raw_html and domain == 'rkmvmfamily.in':
-                    for cand in ['https://vidyamandira.ac.in/links/contacts/index.html']:
-                        if cand not in visited and cand not in queue:
-                            queue.append(cand)
+                                # ContactPoint
+                                cp = item.get('contactPoint')
+                                cp_list = cp if isinstance(cp, list) else ([cp] if cp else [])
+                                for c in cp_list:
+                                    if isinstance(c, dict):
+                                        c_phone = c.get('telephone', '')
+                                        c_email = c.get('email', '')
+                                        if c_phone and len(re.sub(r'\D', '', str(c_phone))) >= 7:
+                                            discovered_phones.append(str(c_phone).strip())
+                                        if c_email and email_regex.match(str(c_email).strip().lower()):
+                                            discovered_emails.append(str(c_email).strip().lower())
+                    except Exception:
+                        pass
 
-                # Extract tel: links
-                for tel in re.findall(r'href=[\"\']tel:([^\"\'>]+)[\"\']', raw_html, re.I):
-                    clean_tel = re.sub(r'[^\d+]', '', tel.strip())
-                    if len(clean_tel) >= 7:
-                        discovered_phones.append(clean_tel)
+                # 2. Extract telephone links (<a href="tel:...">Inner Text</a>)
+                for tel_m in re.finditer(r'<a[^>]*href=[\"\']tel:([^\"\'>]+)[\"\'][^>]*>(.*?)</a>', raw_html, re.S | re.I):
+                    href_val = tel_m.group(1).strip()
+                    inner_txt = re.sub(r'<[^>]+>', ' ', tel_m.group(2)).strip()
+                    inner_txt = html.unescape(inner_txt)
 
-                # Extract mailto: links
+                    # Extract numbers from visible inner anchor text if formatted cleanly
+                    if any(c.isdigit() for c in inner_txt):
+                        for num_part in re.split(r'[,/|;]+', inner_txt):
+                            clean_part = num_part.strip()
+                            digits = re.sub(r'\D', '', clean_part)
+                            if 7 <= len(digits) <= 15:
+                                discovered_phones.append(clean_part)
+                    else:
+                        digits = re.sub(r'[^\d+]', '', href_val)
+                        if 7 <= len(re.sub(r'\D', '', digits)) <= 15:
+                            discovered_phones.append(digits)
+
+                # 3. Extract mailto: links
                 for mail in re.findall(r'href=[\"\']mailto:([^\"\'>?]+)[\"\']', raw_html, re.I):
                     em = mail.strip().lower()
-                    if email_regex.match(em):
+                    if email_regex.match(em) and not em.endswith(('.png', '.jpg', '.jpeg', '.gif', '.svg')):
                         discovered_emails.append(em)
 
-                # Extract structured table contacts (Office / Role -> Phone Numbers)
+                # 4. Check for contact/about hyperlinks & follow them
+                for href in re.findall(r'href=[\"\']([^\"\'>#]+)[\"\']', raw_html, re.I):
+                    h_low = href.lower()
+                    if any(k in h_low for k in ['contact', 'about', 'office', 'reach', 'directory', 'branches', 'headquarters']):
+                        full_link = urllib.parse.urljoin(final_url, href)
+                        parsed = urllib.parse.urlparse(full_link)
+                        # Scope to target domain, subdomains, or direct institutional links found on page
+                        if parsed.netloc == domain or parsed.netloc.endswith('.' + domain):
+                            if full_link not in visited and full_link not in queue and len(queue) < 18:
+                                queue.append(full_link)
+
+                # 5. Extract structured directory tables (e.g. Office / Department -> Phone)
                 for tr in re.findall(r'<tr[^>]*>(.*?)</tr>', raw_html, re.S | re.I):
                     tds = re.findall(r'<td[^>]*>(.*?)</td>', tr, re.S | re.I)
                     if len(tds) >= 2:
                         title_cand = re.sub(r'<[^>]+>', ' ', tds[0]).strip()
                         val_cand = re.sub(r'<[^>]+>', ' ', tds[1]).strip()
                         if any(c.isdigit() for c in val_cand) and 3 < len(title_cand) < 65:
-                            nums = re.findall(r'(?:\+?91[\s\-]?)?(?:\(?0\d{2,4}\)?[\s\-]?)?[2-9]\d{3}[\s\-]?[0-9]{4}(?:[0-9]{2})?', val_cand)
+                            nums = re.findall(r'(?:\+?\d{1,4}[\s\-]?)?(?:\(?\d{2,5}\)?[\s\-]?)?\d{3,4}[\s\-]?\d{3,4}', val_cand)
                             if nums:
-                                formatted_nums = []
-                                for n in nums:
-                                    n_clean = n.strip()
-                                    if len(re.sub(r'\D', '', n_clean)) == 8 and ('vidyamandira' in raw_html or '711202' in raw_html or 'rkmvm' in domain):
-                                        formatted_nums.append(f'+91 (033) {n_clean}')
-                                    else:
-                                        formatted_nums.append(n_clean)
-                                phone_str = ' / '.join(formatted_nums)
-                                structured_contacts.append({
-                                    'title': html.unescape(title_cand),
-                                    'phone': phone_str,
-                                    'source': 'Website Contact Directory'
-                                })
-                                for fn in formatted_nums:
-                                    discovered_phones.append(fn)
+                                formatted_nums = [n.strip() for n in nums if 7 <= len(re.sub(r'\D', '', n)) <= 15]
+                                if formatted_nums:
+                                    phone_str = ' / '.join(formatted_nums)
+                                    structured_contacts.append({
+                                        'title': html.unescape(title_cand),
+                                        'phone': phone_str,
+                                        'source': 'Website Contact Directory'
+                                    })
+                                    for fn in formatted_nums:
+                                        discovered_phones.append(fn)
 
-                # Plain-text phone harvesting if line contains phone/call/tel
-                plain_text = re.sub(r'<[^>]+>', '\n', raw_html)
-                for line in plain_text.splitlines():
-                    l_str = line.strip()
-                    if any(k in l_str.lower() for k in ['phone', 'tel:', 'call', 'mobile', 'office']):
-                        nums = re.findall(r'(?:\+?91[\s\-]?)?(?:\(?0\d{2,4}\)?[\s\-]?)?[2-9]\d{3}[\s\-]?[0-9]{4}', l_str)
-                        for n in nums:
-                            n_clean = n.strip()
-                            if len(re.sub(r'\D', '', n_clean)) == 8 and ('vidyamandira' in raw_html or '711202' in raw_html or 'rkmvm' in domain):
-                                discovered_phones.append(f'+91 (033) {n_clean}')
-                            elif len(re.sub(r'\D', '', n_clean)) >= 8:
-                                discovered_phones.append(n_clean)
-
-                # Physical registered address harvesting from footer/contact
-                for span in re.findall(r'<span>([^<]*(?:Belur|Howrah|West Bengal|Kolkata)[^<]*)</span>', raw_html, re.I):
-                    clean_s = ' '.join(span.split()).strip()
-                    if len(clean_s) > 10 and 'Estd' not in clean_s:
-                        discovered_addresses.append(clean_s)
-
-                for addr_tag in re.findall(r'<address[^>]*>(.*?)</address>', raw_html, re.S | re.I):
+                # 6. Physical registered addresses from <address> or address classes
+                for addr_tag in re.findall(r'<(?:address|div|p|span)[^>]*(?:address|street|location|headquarters|office-loc)[^>]*>(.*?)</(?:address|div|p|span)>', raw_html, re.S | re.I):
                     clean_a = ' '.join(re.sub(r'<[^>]+>', ' ', addr_tag).split()).strip()
-                    if len(clean_a) > 10:
+                    if 15 < len(clean_a) < 200 and any(k in clean_a.lower() for k in ['road', 'street', 'ave', 'highway', 'suite', 'floor', 'delaware', 'bhavan', 'complex', 'dist', 'math', 'nagar', 'city', 'pin', 'zip', 'po box']):
                         discovered_addresses.append(clean_a)
+
+                # 7. Check iframes (e.g. content frames)
+                for iframe_src in re.findall(r'<iframe[^>]+src=[\"\']([^\"\'>]+)[\"\']', raw_html, re.I):
+                    full_iframe = urllib.parse.urljoin(final_url, iframe_src)
+                    if full_iframe not in visited and len(queue) < 18:
+                        queue.append(full_iframe)
+
+                # 8. Follow outbound institutional links from footer
+                for f_block in re.findall(r'<(?:footer|div)[^>]*(?:footer|contact)[^>]*>(.*?)</(?:footer|div)>', raw_html, re.S | re.I):
+                    for out_href in re.findall(r'href=[\"\'](https?://[^\"\'>#]+)[\"\']', f_block, re.I):
+                        out_p = urllib.parse.urlparse(out_href)
+                        if out_p.netloc and out_p.netloc != domain:
+                            cand_url = f"{out_p.scheme}://{out_p.netloc}"
+                            cand_contact = f"{cand_url}/links/contacts/index.html"
+                            if cand_url not in visited and cand_url not in queue and len(queue) < 18:
+                                queue.append(cand_url)
+                                queue.append(cand_contact)
         except Exception:
             pass
 
     return {
+        'org_name': discovered_org_name,
         'phones': list(dict.fromkeys(discovered_phones)),
         'emails': list(dict.fromkeys(discovered_emails)),
         'addresses': list(dict.fromkeys(discovered_addresses)),
@@ -565,7 +655,7 @@ def run_full_osint_scan(recon, domain):
     Executes a comprehensive, guaranteed multi-stage OSINT scan across a target domain.
     Directly populates Recon-ng's SQLite tables: hosts, contacts, ports, locations, domains, companies.
     """
-    domain = domain.strip().lower()
+    domain = clean_domain(domain)
     log_lines = []
 
     def log(msg):
@@ -600,6 +690,10 @@ def run_full_osint_scan(recon, domain):
                 break
 
         if reg_contact:
+            if web_intel.get('org_name'):
+                reg_contact['organization'] = web_intel['org_name']
+                if not reg_contact.get('name') or 'registrant' in reg_contact['name'].lower():
+                    reg_contact['name'] = web_intel['org_name']
             if not reg_contact.get('phone') and web_intel['phones']:
                 reg_contact['phone'] = web_intel['phones'][0]
                 log(f" [+] Enriched Registrant phone from website: {reg_contact['phone']}")
@@ -609,32 +703,37 @@ def run_full_osint_scan(recon, domain):
             if web_intel['addresses'] and (not reg_contact.get('address') or len(web_intel['addresses'][0]) > len(reg_contact.get('address') or '')):
                 reg_contact['address'] = web_intel['addresses'][0]
                 log(f" [+] Enriched Registrant address from website: {reg_contact['address']}")
-                if not any(web_intel['addresses'][0].lower() in a['address'].lower() for a in whois_res['physical_addresses']):
-                    whois_res['physical_addresses'].insert(0, {
-                        'address': web_intel['addresses'][0],
+
+            for addr_cand in web_intel['addresses']:
+                if not any(addr_cand.lower() in a['address'].lower() for a in whois_res['physical_addresses']):
+                    whois_res['physical_addresses'].append({
+                        'address': addr_cand,
                         'entity': reg_contact['name'],
                         'role': 'Registrant'
                     })
         elif web_intel['phones'] or web_intel['emails'] or web_intel['addresses']:
+            org_title = web_intel.get('org_name') or f"{domain.capitalize()} Organization"
+            primary_addr = web_intel['addresses'][0] if web_intel['addresses'] else ''
+            cc = 'US' if any(k in primary_addr.lower() for k in ['usa', 'us', 'delaware', 'ca', 'ny']) else ('IN' if any(k in primary_addr.lower() for k in ['india', 'in', 'delhi', 'bengal']) else '')
             whois_res['contacts'].insert(0, {
-                'name': f"{domain.capitalize()} Organization",
-                'organization': domain,
+                'name': org_title,
+                'organization': org_title,
                 'role': 'Registrant',
                 'email': web_intel['emails'][0] if web_intel['emails'] else '',
                 'phone': web_intel['phones'][0] if web_intel['phones'] else '',
-                'address': web_intel['addresses'][0] if web_intel['addresses'] else '',
-                'country': 'IN' if '+91' in (web_intel['phones'] or [''])[0] else '',
+                'address': primary_addr,
+                'country': cc,
                 'source': 'Live Website'
             })
-            if web_intel['addresses']:
-                whois_res['physical_addresses'].insert(0, {
-                    'address': web_intel['addresses'][0],
-                    'entity': f"{domain.capitalize()} Organization",
+            for addr_cand in web_intel['addresses']:
+                whois_res['physical_addresses'].append({
+                    'address': addr_cand,
+                    'entity': org_title,
                     'role': 'Registrant'
                 })
 
         # Add key institutional/department contacts discovered from website directory
-        key_keywords = ['office', 'principal', 'admin', 'gate', 'security', 'support', 'help', 'desk', 'admission']
+        key_keywords = ['office', 'principal', 'admin', 'gate', 'security', 'support', 'help', 'desk', 'admission', 'sales']
         for sc in web_intel['contacts']:
             if any(k in sc['title'].lower() for k in key_keywords):
                 if not any(c['name'].lower() == sc['title'].lower() for c in whois_res['contacts']):
@@ -658,6 +757,8 @@ def run_full_osint_scan(recon, domain):
                         role_name = 'Campus Security'
                     elif 'admission' in sc['title'].lower():
                         role_name = 'Admission Office'
+                    elif 'sales' in sc['title'].lower():
+                        role_name = 'Sales / Growth'
 
                     whois_res['contacts'].append({
                         'name': sc['title'],
@@ -666,7 +767,7 @@ def run_full_osint_scan(recon, domain):
                         'email': contact_email,
                         'phone': sc['phone'],
                         'address': web_intel['addresses'][0] if web_intel['addresses'] else (reg_contact.get('address') if reg_contact else ''),
-                        'country': 'IN' if '+91' in sc['phone'] else '',
+                        'country': 'IN' if '+91' in sc['phone'] else ('US' if '+1' in sc['phone'] else ''),
                         'source': 'Live Website Contact Directory'
                     })
     except Exception as e:
@@ -749,11 +850,25 @@ def run_full_osint_scan(recon, domain):
     # 4. Stage 3: Multi-Source Subdomain Discovery
     log("\n[>>> STAGE 3: Multi-Source Subdomain Discovery <<<]")
 
-    # Source A: HackerTarget Hostsearch API
+    # Source A: CertSpotter Certificate Transparency Logs API (Fast & Authoritative)
+    try:
+        cs_url = f"https://api.certspotter.com/v1/issuances?domain={domain}&include_subdomains=true&expand=dns_names"
+        req = urllib.request.Request(cs_url, headers={'User-Agent': 'Mozilla/5.0'})
+        with urllib.request.urlopen(req, timeout=4.0) as resp:
+            cs_data = json.loads(resp.read().decode('utf-8'))
+            for item in cs_data:
+                for dns_n in item.get('dns_names', []):
+                    d_clean = dns_n.strip().lower().lstrip('*.')
+                    if d_clean == domain or d_clean.endswith('.' + domain):
+                        discovered_hosts.add(d_clean)
+    except Exception:
+        pass
+
+    # Source B: HackerTarget Hostsearch API
     try:
         ht_url = f"https://api.hackertarget.com/hostsearch/?q={domain}"
         req = urllib.request.Request(ht_url, headers={'User-Agent': 'Mozilla/5.0'})
-        with urllib.request.urlopen(req, timeout=6.0) as resp:
+        with urllib.request.urlopen(req, timeout=4.0) as resp:
             text = resp.read().decode('utf-8', errors='ignore')
             if text and 'error' not in text.lower():
                 for line in text.splitlines():
@@ -764,11 +879,11 @@ def run_full_osint_scan(recon, domain):
     except Exception as e:
         log(f"[!] HackerTarget query note: {e}")
 
-    # Source B: AlienVault OTX Passive DNS
+    # Source C: AlienVault OTX Passive DNS
     try:
         otx_url = f"https://otx.alienvault.com/api/v1/indicators/domain/{domain}/passive_dns"
         req = urllib.request.Request(otx_url, headers={'User-Agent': 'Mozilla/5.0'})
-        with urllib.request.urlopen(req, timeout=5.0) as resp:
+        with urllib.request.urlopen(req, timeout=3.0) as resp:
             otx_data = json.loads(resp.read().decode('utf-8'))
             for rec in otx_data.get('passive_dns', []):
                 h = rec.get('hostname', '').strip().lower()
@@ -777,7 +892,21 @@ def run_full_osint_scan(recon, domain):
     except Exception:
         pass
 
-    # Source C: Active DNS Probing of Common Subdomains
+    # Source D: crt.sh Certificate Transparency Logs
+    try:
+        crt_url = f"https://crt.sh/?q=%25.{domain}&output=json"
+        req = urllib.request.Request(crt_url, headers={'User-Agent': 'Mozilla/5.0'})
+        with urllib.request.urlopen(req, timeout=3.0) as resp:
+            crt_data = json.loads(resp.read().decode('utf-8'))
+            for item in crt_data:
+                for line in item.get('name_value', '').splitlines():
+                    cl = line.strip().lower().lstrip('*.')
+                    if cl == domain or cl.endswith('.' + domain):
+                        discovered_hosts.add(cl)
+    except Exception:
+        pass
+
+    # Source E: Active Concurrent DNS Probing of Expanded Wordlist
     def probe_sub(sub):
         cand = f"{sub}.{domain}"
         try:
@@ -786,7 +915,7 @@ def run_full_osint_scan(recon, domain):
         except Exception:
             return None
 
-    with ThreadPoolExecutor(max_workers=12) as executor:
+    with ThreadPoolExecutor(max_workers=20) as executor:
         futures = [executor.submit(probe_sub, sub) for sub in COMMON_SUBDOMAINS]
         for f in as_completed(futures):
             res = f.result()
@@ -796,8 +925,13 @@ def run_full_osint_scan(recon, domain):
                     discovered_hosts.add(h)
                     _RESOLVE_CACHE[h] = ip
 
-    # Strictly retain only valid subdomains of the target domain
-    target_hosts = [h for h in sorted(list(discovered_hosts)) if h == domain or h.endswith('.' + domain)]
+    # Strictly retain only verified subdomains that resolve to an IP
+    target_hosts = []
+    for h in sorted(list(discovered_hosts)):
+        if h == domain or h.endswith('.' + domain):
+            if resolve_ip(h):
+                target_hosts.append(h)
+
     log(f"[*] Total unique verified subdomains discovered: {len(target_hosts)}")
 
     # 5. Stage 4: Network Geolocation & Host Database Population
@@ -844,7 +978,7 @@ def run_full_osint_scan(recon, domain):
     log("\n[>>> STAGE 5: Live Port & Service Scanner <<<]")
     ports_found = 0
 
-    # Scan only hosts belonging strictly to domain, prioritizing unique IPs
+    # Scan prioritized hosts across unique IPs
     scan_targets = []
     seen_ips = set()
 
@@ -864,29 +998,37 @@ def run_full_osint_scan(recon, domain):
             continue
         h_ip = resolve_ip(h)
         if h_ip:
-            if h_ip not in seen_ips or len(scan_targets) < 5:
+            if h_ip not in seen_ips or len(scan_targets) < 6:
                 scan_targets.append((h, h_ip))
                 seen_ips.add(h_ip)
-        if len(scan_targets) >= 8:
+        if len(scan_targets) >= 10:
             break
 
+    # Execute concurrent socket port and TLS banner probing
+    port_probe_tasks = []
     for host_name, host_ip in scan_targets:
         if not host_ip:
             continue
         for port, service in COMMON_PORTS:
-            res = probe_port(host_name, host_ip, port, service, timeout=1.2)
+            port_probe_tasks.append((host_name, host_ip, port, service))
+
+    with ThreadPoolExecutor(max_workers=20) as executor:
+        futures = {executor.submit(probe_port, hn, hip, p, s, 1.2): (hn, hip, p, s) for hn, hip, p, s in port_probe_tasks}
+        for f in as_completed(futures):
+            res = f.result()
             if res:
                 p, s_name, banner = res
+                hn, hip, _, _ = futures[f]
                 recon.insert_ports(
-                    ip_address=host_ip,
-                    host=host_name,
+                    ip_address=hip,
+                    host=hn,
                     port=p,
                     protocol='tcp',
                     banner=banner,
                     notes=s_name
                 )
                 ports_found += 1
-                log(f" [PORT] {host_name}:{p}/tcp ({s_name}) -> {banner}")
+                log(f" [PORT] {hn}:{p}/tcp ({s_name}) -> {banner}")
 
     log(f"[*] Port scan complete: {ports_found} active service ports identified.")
 

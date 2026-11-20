@@ -1181,11 +1181,21 @@
 
     // Start 1-Click Scan
     async function startScan() {
-      const domain = document.getElementById('domainInput').value.trim().toLowerCase();
-      if (!domain) {
+      let rawDomain = document.getElementById('domainInput').value.trim().toLowerCase();
+      if (!rawDomain) {
         showToast('Please enter a target domain first', 'error');
         return;
       }
+      if (rawDomain.includes('://')) {
+        rawDomain = rawDomain.split('://')[1];
+      }
+      rawDomain = rawDomain.split('/')[0].split(':')[0].trim();
+      const domain = rawDomain.replace(/^\.+|\.+$/g, '');
+      if (!domain) {
+        showToast('Please enter a valid target domain (e.g. faceoff.world)', 'error');
+        return;
+      }
+      document.getElementById('domainInput').value = domain;
 
       const scanBtn = document.getElementById('scanBtn');
       const progressBox = document.getElementById('progressBox');

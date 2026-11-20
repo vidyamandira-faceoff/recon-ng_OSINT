@@ -570,7 +570,7 @@ class TableInst(Resource):
         rows = columnize(columns, rows)
         target_domain = request.args.get('domain')
         if target_domain:
-            target_domain = target_domain.strip().lower()
+            target_domain = clean_domain(target_domain)
             if table in ['hosts', 'ports']:
                 rows = [r for r in rows if r.get('host', '').lower() == target_domain or r.get('host', '').lower().endswith('.' + target_domain)]
             elif table == 'contacts':
@@ -683,7 +683,7 @@ class ModuleRun(Resource):
 api.add_resource(ModuleRun, '/modules/<path:module>/run')
 
 
-from backend.scanner import run_full_osint_scan
+from backend.scanner import run_full_osint_scan, clean_domain
 
 
 class FullScan(Resource):
@@ -693,7 +693,7 @@ class FullScan(Resource):
         Launches an automated comprehensive OSINT scan across a target domain
         '''
         data = request.json or {}
-        domain = data.get('domain', '').strip().lower()
+        domain = clean_domain(data.get('domain', ''))
         if not domain:
             abort(400, description="Domain is required for full scan.")
 
@@ -772,7 +772,7 @@ class HistoryInst(Resource):
         '''
         Deletes a specific domain from history and wipes its corresponding records
         '''
-        domain = domain.strip().lower()
+        domain = clean_domain(domain)
         recon.query('DELETE FROM scan_history WHERE domain = ?', (domain,))
         recon.query('DELETE FROM domains WHERE domain = ?', (domain,))
         recon.query('DELETE FROM hosts WHERE host LIKE ? OR host = ?', (f'%.{domain}', domain))
